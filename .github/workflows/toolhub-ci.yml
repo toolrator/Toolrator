@@ -1,0 +1,51 @@
+name: Toolhub CI
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'packages/toolhub/**'
+      - '.github/workflows/toolhub-ci.yml'
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'packages/toolhub/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: toolhub-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: packages/toolhub/package-lock.json
+
+      - name: Install Dependencies
+        working-directory: packages/toolhub
+        run: npm ci
+
+      - name: Run Typecheck
+        working-directory: packages/toolhub
+        run: npm run typecheck
+
+      - name: Build Code
+        working-directory: packages/toolhub
+        run: npm run build
+
+      - name: Run Tests
+        working-directory: packages/toolhub
+        run: npm test

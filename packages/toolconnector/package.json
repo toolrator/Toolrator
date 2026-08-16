@@ -1,0 +1,66 @@
+{
+  "name": "@toolrator/toolconnector",
+  "version": "0.0.1-preview",
+  "type": "module",
+  "description": "Local stdio MCP bridge connecting AI agents to search-engine backends (via toolpanel or any compatible upstream).",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "mcp-client",
+    "ai-agents",
+    "llm",
+    "stdio",
+    "tool-use",
+    "tool-discovery",
+    "search",
+    "typescript"
+  ],
+  "license": "Apache-2.0",
+  "author": "Toolrator <contact@toolrator.com>",
+  "homepage": "https://toolrator.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/toolrator/toolrator.git",
+    "directory": "packages/toolconnector"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "toolconnector": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "MCP-FEATURES.md",
+    "search-engines.example.json"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "prestart": "npm run build",
+    "start": "node dist/index.js",
+    "test": "node --import tsx --test tests/**/*.test.ts",
+    "test:e2e": "node --import tsx --test tests/toolconnector-e2e.test.ts",
+    "test:compliance": "node --import tsx --test tests/mcp-features-compliance.test.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "zod": "^4.2.0",
+    "@modelcontextprotocol/server": "^2.0.0-beta.3",
+    "@modelcontextprotocol/client": "^2.0.0-beta.3"
+  },
+  "devDependencies": {
+    "@hono/node-server": "^1.13.8",
+    "hono": "^4.6.11",
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

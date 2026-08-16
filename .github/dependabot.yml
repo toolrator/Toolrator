@@ -1,0 +1,25 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /packages/toolconnector
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /packages/toolhub
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /packages/toolpanel
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

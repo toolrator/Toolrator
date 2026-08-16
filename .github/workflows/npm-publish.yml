@@ -1,0 +1,71 @@
+name: Publish to NPM Registry
+
+on:
+  release:
+    types: [created]
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish-toolconnector:
+    name: Publish @toolrator/toolconnector
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install Dependencies
+        working-directory: packages/toolconnector
+        run: npm ci
+
+      - name: Run Typecheck & Build
+        working-directory: packages/toolconnector
+        run: |
+          npm run typecheck
+          npm run build
+
+      - name: Publish to NPM
+        working-directory: packages/toolconnector
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-toolpanel:
+    name: Publish @toolrator/toolpanel
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install Dependencies
+        working-directory: packages/toolpanel
+        run: npm ci
+
+      - name: Run Typecheck & Build
+        working-directory: packages/toolpanel
+        run: |
+          npm run typecheck
+          npm run build
+
+      - name: Publish to NPM
+        working-directory: packages/toolpanel
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

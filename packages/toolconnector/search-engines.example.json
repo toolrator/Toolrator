@@ -1,0 +1,22 @@
+[
+  {
+    "id": "default",
+    "label": "Default Upstream Search",
+    "transport": "http",
+    "endpoint": "https://upstream.example.com",
+    "schemaUrl": "https://upstream.example.com/api/search/schema",
+    "notes": "Example of the implicit-default-style engine entry. The id `default` is just an example — at runtime, when no engines are configured, the connector generates an implicit engine with id `${CONNECTOR_PRODUCT_NAME}-default` (default: `toolconnector-default`) pointing at the resolved upstream.",
+    "timeoutMs": 10000,
+    "enabled": true
+  },
+  {
+    "id": "internal-wiki", 
+    "label": "Internal Wiki Search",
+    "transport": "http",
+    "endpoint": "http://localhost:4034/search",
+    "schemaUrl": "http://localhost:4034/schema",
+    "notes": "Queries internal documentation across departments. Always use this engine for company policy or dev guidelines.",
+    "timeoutMs": 5000,
+    "enabled": true
+  }
+]

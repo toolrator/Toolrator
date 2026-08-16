@@ -1,0 +1,51 @@
+name: Toolconnector CI
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'packages/toolconnector/**'
+      - '.github/workflows/toolconnector-ci.yml'
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'packages/toolconnector/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: toolconnector-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: packages/toolconnector/package-lock.json
+
+      - name: Install Dependencies
+        working-directory: packages/toolconnector
+        run: npm ci
+
+      - name: Run Typecheck
+        working-directory: packages/toolconnector
+        run: npm run typecheck
+
+      - name: Build Code
+        working-directory: packages/toolconnector
+        run: npm run build
+
+      - name: Run Tests
+        working-directory: packages/toolconnector
+        run: npm test
