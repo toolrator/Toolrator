@@ -3,16 +3,14 @@
 **The local stdio bridge connecting any local AI agent to search-engine backends (via toolpanel or any compatible upstream).**
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
-[![Protocol: MCP](https://img.shields.io/badge/Protocol-MCP%20Draft%202026--07--28-blueviolet)](https://modelcontextprotocol.io/specification/draft)
+[![Protocol: MCP](https://img.shields.io/badge/Protocol-MCP%202026--07--28-blueviolet)](https://modelcontextprotocol.io/specification/2026-07-28)
 [![Type: Local stdio Server](https://img.shields.io/badge/Type-Local%20stdio%20Server-success)](#)
 
 ---
 
-## 📦 Installation
-
 ## 🟢 Project Status
 
-**v0.0.1-preview** — Adopts [MCP Draft 2026-07-28](https://modelcontextprotocol.io/specification/draft) (stateless, per-request capabilities, MRTR, Tasks extension). See [`MCP-FEATURES.md`](./MCP-FEATURES.md) for the full compliance matrix.
+**v0.0.1-preview** — Adopts [MCP 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28) (official stable revision: stateless, per-request capabilities, MRTR, Tasks extension). See [`MCP-FEATURES.md`](./MCP-FEATURES.md) for the full compliance matrix.
 
 **Requirements**: Node.js >= 20.
 
@@ -55,7 +53,7 @@ graph TD
     end
     
     subgraph Execution [External Servers]
-        TC <-->|Direct SSE| ExtHTTP[🌐 External Streamable HTTP MCP]
+        TC <-->|Streamable HTTP / SSE| ExtHTTP[🌐 External Streamable HTTP MCP]
     end
 ```
 
@@ -88,7 +86,7 @@ The `toolconnector` exposes exactly **4 client-facing tools** to your AI agent:
 ### 3. `manage_auth`
 * **Purpose**: Manage passwordless device-flow authentication and check account status.
 * **Parameters**: 
-  * `action` (`"status" | "start_device_flow" | "poll_device_flow" | "logout"`, required).
+  * `action` (`"status" | "start_device_flow" | "poll_device_flow" | "logout"`, required): The auth action to perform. Dynamically scoped by state: `"status"` and `"logout"` when authenticated; `"status"`, `"start_device_flow"`, and `"poll_device_flow"` when anonymous.
   * `device_code` (string, optional): Required for manual polling.
 * **Returns**: Login state, verification URL and user code, or confirmation status.
 
@@ -171,6 +169,7 @@ Available environment variables:
 - `CONNECTOR_API_KEY`: Pre-configured API key (skips the device login flow if provided).
 - `CONNECTOR_CONFIG_DIR`: Directory for storing local state (`credentials.json`, `favorites.json`, `search-engines.json`). Defaults to an OS-specific path (see [Config directory](#config-directory)).
 - `CONNECTOR_UPSTREAM_URL`: Base URL for authentication endpoints (default: `https://toolrator.com`). Used as the neutral fallback so non-technical / remotely-hosted users without toolpanel still get the `auto` flow; override to point at your own upstream.
+- `CONNECTOR_DEFAULT_UPSTREAM_URL`: Default base URL fallback when `CONNECTOR_UPSTREAM_URL` is unset (default: `https://toolrator.com`).
 - `CONNECTOR_PRODUCT_NAME`: Product name driving product-derived identifiers — the config-dir subfolder, the implicit-default search-engine id (`<productName>-default`), and any user-facing string that mentions the product. The auth-management tool name itself (`manage_auth`) is fixed and NOT interpolated. Default: `toolconnector`.
 - `TOOLPANEL_URL`: Base URL of a self-hostable **toolpanel** instance (default: `http://127.0.0.1:7800`). When set and active, the connector prefers toolpanel over `CONNECTOR_UPSTREAM_URL` for the authoritative search-engine config. See [`toolpanel`](../../toolpanel).
 - `TOOLPANEL_DISCOVERY`: `auto` (default) or `off`. When `auto`, the connector probes `TOOLPANEL_URL` at boot (and on each re-resolve) to decide if toolpanel is alive before preferring it. When `off`, the probe is skipped entirely — useful when toolpanel is on a different host and you've already pinned `CONNECTOR_SEARCH_CONFIG_MODE=toolpanel`.
@@ -182,6 +181,7 @@ Available environment variables:
   - `auto` — authenticated: prefer toolpanel (when `TOOLPANEL_URL` is set and reachable), fall back to `CONNECTOR_UPSTREAM_URL`, then to the local file. Unauthenticated: local file → implicit-default engine.
   - `toolpanel` — authenticated: only use toolpanel (`TOOLPANEL_URL` must be set). If toolpanel is unreachable, fall back to `CONNECTOR_UPSTREAM_URL`. Never hit `CONNECTOR_UPSTREAM_URL` first.
   - `file` — always use the local `search-engines.json` (or `CONNECTOR_SEARCH_CONFIG`) and never pull from any server.
+- `TOOLCONNECTOR_VERSION`: Connector version reported to MCP clients (default: derived from `package.json`).
 
 ### 💬 Claude Desktop Configuration
 Add the following configuration to your `claude_desktop_config.json`:
@@ -295,9 +295,9 @@ npm run typecheck
 
 ## 📋 Protocol Compliance
 
-This package implements **MCP Draft 2026-07-28** — the working draft of the Model Context Protocol. Every applicable feature from the draft is implemented:
+This package implements **MCP 2026-07-28** — the official stable revision of the Model Context Protocol (released 2026-07-28). Every applicable feature is implemented:
 
-| Draft Change | SEP | Status |
+| Change | SEP | Status |
 |---|---|---|
 | Stateless protocol (no `initialize` handshake) | SEP-2575 | ✅ |
 | `server/discover` / per-request `_meta` capabilities | SEP-2575 | ✅ |
@@ -305,7 +305,7 @@ This package implements **MCP Draft 2026-07-28** — the working draft of the Mo
 | Multi Round-Trip Requests (MRTR / `input_required`) | SEP-2322 | ✅ |
 | Tasks extension (`tasks/get`, `tasks/update`, `tasks/cancel`) | SEP-2663 | ✅ |
 | `CacheableResult` (`ttlMs`, `cacheScope`) | SEP-2549 | ✅ |
-| Error codes `-32020`/`-32021`/`-32022` | — | ✅ |
+| Error codes `-32020`/`-32022` (`-32021` translated by SDK) | — | ✅ |
 
 See the **[full compliance matrix → `MCP-FEATURES.md`](./MCP-FEATURES.md)** for the complete per-feature tracking with spec references and test linkages.
 
@@ -343,10 +343,9 @@ See [`CONTRIBUTING.md`](https://github.com/toolrator/toolrator/blob/main/CONTRIB
 
 ## 🙏 Acknowledgements
 
-- [MCP SDK](https://github.com/modelcontextprotocol/sdk) — `@modelcontextprotocol/client` and `@modelcontextprotocol/server` v2 (beta)
-- [Hono](https://hono.dev/) — HTTP framework
+- [MCP SDK](https://github.com/modelcontextprotocol/sdk) — `@modelcontextprotocol/client` and `@modelcontextprotocol/server` v2
+- [Hono](https://hono.dev/) — HTTP test harness framework
 - [Zod](https://zod.dev/) — Schema validation
-- [MeiliSearch](https://meilisearch.com/) — Search backend
 
 ---
 

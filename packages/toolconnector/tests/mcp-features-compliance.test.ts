@@ -477,7 +477,7 @@ describe("MCP Feature Compliance Test Suite", () => {
     assert(body1.result.inputRequests?.user_email, "Expected inputRequests definition");
     assert(elicitCallCount === 1, "Upstream mock server must receive exactly 1 call");
 
-    // Round 2: Call back with input_responses and request_state
+    // Round 2: Call back with inputResponses and requestState
     const res2 = await client.callTool({
       name: "mcp_server",
       arguments: {

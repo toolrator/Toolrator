@@ -14,6 +14,7 @@ import { loadConfig, type SearchEngineConfig } from "./config.js";
 import { SearchService } from "./search-service.js";
 import { MemorySearchAdapter } from "./adapters/memory.js";
 import { MeiliSearchAdapter } from "./adapters/meilisearch.js";
+import { embeddingDimensions } from "./embedder.js";
 import type { SearchAdapter, SearchOptions } from "./adapters/types.js";
 
 // ---------------------------------------------------------------------------
@@ -27,6 +28,9 @@ async function createAdapter(config: SearchEngineConfig): Promise<SearchAdapter>
       searchKey: config.meiliSearchKey,
       adminKey: config.meiliAdminKey,
       indexName: config.meiliIndexName,
+      // Keep MeiliSearch vector settings in sync with the selected
+      // embedding provider (e.g. 1024 dims for bge-m3 / qwen3).
+      dimensions: embeddingDimensions(),
     });
     await adapter.initialize();
     return adapter;
@@ -177,7 +181,8 @@ export function createApp(
 
   /**
    * POST /admin/index
-   * Index one or more MCP server documents.
+   * Index one or more MCP server documents (upsert; rebuilds the tools of
+   * the upserted servers in the tool index).
    * Body: { documents: [...] } or a single document object.
    */
   admin.post("/index", async (c) => {
@@ -193,12 +198,71 @@ export function createApp(
       return c.json({ error: "no documents provided" }, 400);
     }
 
-    const count = await service.indexer.indexBatch(docs);
+    const result = await service.indexer.indexBatch(docs, true);
     service.clearCache();
     return c.json({
       success: true,
-      indexed: count,
-      skipped: docs.length - count,
+      ...result,
+    });
+  });
+
+  /**
+   * GET /admin/index
+   * Minimal metadata of all indexed documents (servers + tools). Used by the
+   * enterprise incremental sync to diff against the database cheaply.
+   */
+  admin.get("/index", async (c) => {
+    try {
+      const list = await service.getIndexList();
+      return c.json({
+        servers: list.servers,
+        tools: list.tools,
+        generated_at: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error("[admin/index] Failed to list documents:", err);
+      return c.json({ error: "index_list_failed" }, 500);
+    }
+  });
+
+  /**
+   * POST /admin/sync
+   * Incremental sync: upsert changed servers and delete removed ones.
+   * Body: { upsert: [documents...], delete: [mcp_name...] }
+   */
+  admin.post("/sync", async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+
+    const record = (body ?? {}) as Record<string, unknown>;
+    const upsert = Array.isArray(record.upsert) ? record.upsert : [];
+    const deleteNames = Array.isArray(record.delete)
+      ? record.delete.filter((n: unknown): n is string => typeof n === "string" && n.trim() !== "")
+      : [];
+
+    if (upsert.length === 0 && deleteNames.length === 0) {
+      return c.json({ error: "nothing to sync (provide upsert and/or delete)" }, 400);
+    }
+
+    const result = await service.indexer.indexBatch(upsert, true);
+    const deleted: string[] = [];
+    for (const name of deleteNames) {
+      try {
+        await service.indexer.remove(name.trim());
+        deleted.push(name.trim());
+      } catch (err) {
+        console.warn(`[admin/sync] Failed to delete "${name}":`, err);
+      }
+    }
+    service.clearCache();
+    return c.json({
+      success: true,
+      ...result,
+      deleted,
     });
   });
 
@@ -219,7 +283,8 @@ export function createApp(
 
   /**
    * POST /admin/reindex
-   * Full reindex from a provided payload.
+   * Full reindex from a provided payload (clears both indexes first, rebuilds
+   * tool documents, and records the embedding fingerprint as active).
    * Body: { documents: [...] }
    */
   admin.post("/reindex", async (c) => {
@@ -235,18 +300,18 @@ export function createApp(
       return c.json({ error: "no documents provided" }, 400);
     }
 
-    const count = await service.indexer.reindex(docs);
+    const result = await service.indexer.reindex(docs);
+    await service.recordEmbeddingFingerprint();
     service.clearCache();
     return c.json({
       success: true,
-      indexed: count,
-      skipped: docs.length - count,
+      ...result,
     });
   });
 
   /**
    * GET /admin/dump
-   * Export all indexed documents. Used by the hourly cron to generate
+   * Export all indexed server documents. Used by the hourly cron to generate
    * the search index dump ZIP. Returns all documents without pagination.
    */
   admin.get("/dump", async (c) => {
@@ -260,6 +325,27 @@ export function createApp(
     } catch (err) {
       console.error("[admin/dump] Failed to export documents:", err);
       return c.json({ error: "dump_failed" }, 500);
+    }
+  });
+
+  /**
+   * GET /admin/tools
+   * Export all indexed tool documents (dump v2: tools.json source).
+   */
+  admin.get("/tools", async (c) => {
+    try {
+      if (!service.indexer.adapter.toolIndexEnabled) {
+        return c.json({ error: "tool_index_disabled" }, 400);
+      }
+      const tools = await service.indexer.adapter.getAllToolDocuments();
+      return c.json({
+        tools,
+        generated_at: new Date().toISOString(),
+        count: tools.length,
+      });
+    } catch (err) {
+      console.error("[admin/tools] Failed to export tool documents:", err);
+      return c.json({ error: "tools_export_failed" }, 500);
     }
   });
 
@@ -289,8 +375,8 @@ async function main(): Promise<void> {
   const service = new SearchService(adapter, config);
   const app = createApp(service, config);
 
-  serve({ fetch: app.fetch, port: config.port }, (info) => {
-    console.log(`\n✅ Toolhub is ready on http://localhost:${info.port}`);
+  serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {
+    console.log(`\n✅ Toolhub is ready on http://${config.host}:${info.port}`);
     console.log(`   Search:  GET http://localhost:${info.port}/search?q=...`);
     console.log(`   Health:  GET http://localhost:${info.port}/health`);
     console.log(`   Admin:   POST http://localhost:${info.port}/admin/index`);

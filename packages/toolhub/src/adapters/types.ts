@@ -56,11 +56,85 @@ export interface SearchDocument {
   /** Pre-computed vector embeddings for hybrid/vector search. */
   _vectors?: Record<string, number[]>;
 
+  /** Stable content hash for incremental sync diagnostics. */
+  content_hash?: string;
+
+  /** Whether this document currently carries a vector. */
+  has_vector?: boolean;
+
   /** Health status from the last health check. */
   health_status?: string;
 
   /** ISO 8601 timestamp of the last update. */
   updated_at?: string;
+}
+
+/**
+ * A single tool of an MCP server, indexed in the dedicated tool index
+ * (`mcp_tools`). One document per tool, linked to its parent server via
+ * server_mcp_name. This is the parent-child indexing model: the server doc
+ * holds the overview vector, tool docs hold per-tool vectors.
+ */
+export interface ToolDocument {
+  /** Internal document ID: "{encoded_server}__{encoded_tool}". */
+  id: string;
+
+  /** Parent MCP server identifier (mcp_name). */
+  server_mcp_name: string;
+
+  /** Parent server display name (denormalized for display). */
+  server_display_name: string;
+
+  /** Tool name as exposed by tools/list. */
+  tool_name: string;
+
+  /** Tool description as exposed by tools/list. */
+  tool_description: string;
+
+  /** Compact, capped representation of the tool's input schema. */
+  compact_schema: string;
+
+  /** Parent server provider (denormalized, filterable). */
+  provider?: string;
+
+  /** Parent server tags (denormalized, filterable). */
+  tags: string[];
+
+  /** Parent server health status (denormalized, filterable). */
+  health_status?: string;
+
+  /** Parent server base URL (denormalized for display). */
+  server_base_url?: string;
+
+  /** Parent server display metadata needed to render tool cards. */
+  server_provider?: string;
+  server_health_last_checked?: string;
+
+  /** ISO 8601 timestamp of the last update. */
+  updated_at?: string;
+
+  /** Clean text used to generate the tool's semantic vector. */
+  semantic_text?: string;
+
+  /** Pre-computed vector embedding for the tool. */
+  _vectors?: Record<string, number[]>;
+
+  /** Stable content hash for incremental sync diagnostics. */
+  content_hash?: string;
+
+  /** Whether this document currently carries a vector. */
+  has_vector?: boolean;
+}
+
+/**
+ * Raw tool data extracted from a server document's capabilities.
+ * This is the input to the tool document builder (caps, ids, semantic text).
+ */
+export interface RawTool {
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+  annotations?: Record<string, unknown>;
 }
 
 /**
@@ -144,6 +218,86 @@ export interface SearchResult {
    * Example: { tags: { "code": 42, "ai": 15 }, provider: { "acme": 7 } }
    */
   facets?: Record<string, Record<string, number>>;
+
+  /** Which presentation should be prominent: server grid or tool cards. */
+  intent?: "server" | "tool";
+
+  /** Confidence of the intent classification (0..1, best-effort). */
+  intentConfidence?: number;
+
+  /** Diagnostic info for observability and eval tooling. */
+  diagnostics?: {
+    serverHits: number;
+    toolHits: number;
+    usedToolIndex: boolean;
+    fallbackReason?: string;
+  };
+}
+
+/**
+ * Options for a tool-index search.
+ */
+export interface ToolSearchOptions {
+  /** Maximum number of tool results. */
+  limit?: number;
+
+  /** Offset for pagination. */
+  offset?: number;
+
+  /** Filter by parent server (exact match on server_mcp_name). */
+  serverMcpName?: string;
+
+  /** Filter by tags (AND logic). */
+  tags?: string[];
+
+  /** Filter by provider (exact match). */
+  provider?: string;
+
+  /** Query embedding vector for hybrid search. */
+  vector?: number[];
+
+  /** Include per-hit ranking scores (showRankingScore). */
+  withScores?: boolean;
+}
+
+/**
+ * A single tool hit from the tool index, with ranking metadata.
+ */
+export interface ToolDocumentHit extends ToolDocument {
+  /** Relevance score (0..1) when withScores is used. */
+  _rankingScore?: number;
+  _semanticScore?: number;
+  /** 1-based rank of this hit in the tool search. */
+  _rank?: number;
+}
+
+/**
+ * The result of a tool-index search.
+ */
+export interface ToolSearchResult {
+  hits: ToolDocumentHit[];
+  total: number;
+  offset: number;
+  limit: number;
+  processingTimeMs: number;
+}
+
+/**
+ * Minimal metadata about an indexed document, used for incremental sync diffs.
+ */
+export interface IndexListEntry {
+  id: string;
+  updated_at?: string;
+  content_hash?: string;
+  has_vector?: boolean;
+}
+
+/**
+ * A normalized, embeddable document produced by the indexer.
+ */
+export interface IndexedDocument {
+  doc: SearchDocument;
+  vector: number[] | null;
 }
 
 /**
@@ -215,4 +369,66 @@ export interface SearchAdapter {
    * Implementations should paginate the underlying backend to avoid truncation.
    */
   getAllDocuments(): Promise<SearchDocument[]>;
+
+  // -------------------------------------------------------------------------
+  // Tool index (D7 parent-child model) — optional capabilities
+  // -------------------------------------------------------------------------
+
+  /** Whether the tool index is configured/enabled for this adapter. */
+  readonly toolIndexEnabled: boolean;
+
+  /** Ensure the tool index exists with the right settings. */
+  initializeTools(): Promise<void>;
+
+  /** Index (upsert) tool documents. */
+  indexTools(documents: ToolDocument[]): Promise<void>;
+
+  /** Remove all tool documents belonging to a server. */
+  removeToolsByServer(mcpName: string): Promise<void>;
+
+  /** Remove tool documents by their document ids. */
+  deleteTools(ids: string[]): Promise<void>;
+
+  /** Execute a search against the tool index. */
+  searchTools(query: string, options?: ToolSearchOptions): Promise<ToolSearchResult>;
+
+  /** Number of documents in the tool index. */
+  getToolDocumentCount(): Promise<number>;
+
+  /** Clear all tool documents. */
+  clearTools(): Promise<void>;
+
+  /** Retrieve all tool documents (used for the dump). */
+  getAllToolDocuments(): Promise<ToolDocument[]>;
+
+  /** Minimal metadata of all server docs (incremental sync diffing). */
+  getIndexList(): Promise<IndexListEntry[]>;
+
+  /** Minimal metadata of all tool docs (incremental sync diffing). */
+  getToolIndexList(): Promise<IndexListEntry[]>;
+
+  // -------------------------------------------------------------------------
+  // Embedding metadata (fingerprint)
+  // -------------------------------------------------------------------------
+
+  /** Read the persisted embedding fingerprint document (null when absent). */
+  readEmbeddingMeta(): Promise<EmbeddingMeta | null>;
+
+  /** Persist the embedding fingerprint document. */
+  writeEmbeddingMeta(meta: EmbeddingMeta): Promise<void>;
+}
+
+/**
+ * Persisted embedding configuration fingerprint (stored in a tiny meta index).
+ * `current` describes what the running config wants; `active` describes what
+ * the indexes were actually built with. A mismatch means a reindex is needed.
+ */
+export interface EmbeddingMeta {
+  id: "embedding";
+  current_fingerprint: string;
+  active_fingerprint: string;
+  provider: string;
+  model: string;
+  dimensions: number;
+  updated_at: string;
 }

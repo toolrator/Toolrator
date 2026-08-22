@@ -1,8 +1,8 @@
 # MCP Feature Compliance — Toolconnector
 
-> **Protocol**: MCP 2026-07-28 (Draft / Release Candidate)  
-> **SDK**: `@modelcontextprotocol/server` + `@modelcontextprotocol/client` v2 (beta)  
-> **Last updated**: 2026-07-13
+> **Protocol**: MCP 2026-07-28 (Official — released 2026-07-28)  
+> **SDK**: `@modelcontextprotocol/server` + `@modelcontextprotocol/client` v2 (stable)  
+> **Last updated**: 2026-08-18
 
 This document tracks every MCP 2026-07-28 protocol feature and whether it is implemented in the toolconnector. The toolconnector acts as both:
 - An **MCP Server** (exposed to the AI agent via stdio)
@@ -18,7 +18,7 @@ This document tracks every MCP 2026-07-28 protocol feature and whether it is imp
 | 🔧 | In progress |
 | ❌ | Not implemented |
 | ➖ | Not applicable to the toolconnector |
-| ⏳ | Deferred (waiting for SDK v2 stable / upstream support) |
+| ⏳ | Deferred (awaiting upstream spec stabilization / SDK support) |
 
 ---
 
@@ -73,7 +73,7 @@ This document tracks every MCP 2026-07-28 protocol feature and whether it is imp
 |---|---------|----------|--------|----------|-------|
 | 5.1 | Detect `resultType: "input_required"` from `tools/call` | SEP-2322 | ✅ | `external-client.ts` | Using low-level client `request` and `allowInputRequired: true`. |
 | 5.2 | Format `inputRequests` for the AI agent | SEP-2322 | ✅ | `tools.ts` | Surfaces elicitation questions as tool result. |
-| 5.3 | Accept `request_state` + `input_responses` on retry | SEP-2322 | ✅ | `tools.ts` | Exposed via `mcp_server` passthrough — `tools/call` with `params { requestState, inputResponses }`. |
+| 5.3 | Accept `requestState` + `inputResponses` on retry | SEP-2322 | ✅ | `tools.ts` | Exposed via `mcp_server` passthrough — `tools/call` with `params { requestState, inputResponses }`. |
 | 5.4 | Pass `inputResponses` + `requestState` to `tools/call` | SEP-2322 | ✅ | `external-client.ts` | Passed into client request parameters on retry. |
 | 5.5 | `resultType: "complete"` on all normal results | SEP-2322 | ✅ | `tools.ts` | Treated properly. |
 
@@ -151,7 +151,7 @@ This document tracks every MCP 2026-07-28 protocol feature and whether it is imp
 |---|--------|--------|----------|-------|
 | 12.1 | `@modelcontextprotocol/sdk` → `@modelcontextprotocol/server` + `@modelcontextprotocol/client` | ✅ | `package.json` | Migrated successfully. |
 | 12.2 | `McpServer.tool()` → `registerTool()` | ✅ | `tools.ts` | Handled properly with standard schema. |
-| 12.3 | `McpError` → `ProtocolError` | ✅ | `errors.ts` | Updated. |
+| 12.3 | `McpError` → JSON-RPC error classification | ✅ | `errors.ts` | Uses standard JSON-RPC error codes and structured error mapping. |
 | 12.4 | `StdioServerTransport` → `@modelcontextprotocol/server/stdio` | ✅ | `index.ts` | Updated. |
 | 12.5 | `Client` → `@modelcontextprotocol/client` | ✅ | `mcp-connection.ts` | Updated. |
 | 12.6 | `SSEClientTransport` removal | ✅ | `mcp-connection.ts` | Maintained as fallback on client. |

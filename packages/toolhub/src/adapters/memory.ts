@@ -9,15 +9,32 @@
 // ---------------------------------------------------------------------------
 
 import type {
+  EmbeddingMeta,
+  IndexListEntry,
   SearchAdapter,
   SearchDocument,
   SearchHit,
   SearchOptions,
   SearchResult,
+  ToolDocument,
+  ToolDocumentHit,
+  ToolSearchOptions,
+  ToolSearchResult,
 } from "./types.js";
 
+export interface MemorySearchAdapterOptions {
+  toolIndexEnabled?: boolean;
+}
+
 export class MemorySearchAdapter implements SearchAdapter {
+  readonly toolIndexEnabled: boolean;
   private documents = new Map<string, SearchDocument>();
+  private toolDocuments = new Map<string, ToolDocument>();
+  private embeddingMeta: EmbeddingMeta | null = null;
+
+  constructor(options: MemorySearchAdapterOptions = {}) {
+    this.toolIndexEnabled = options.toolIndexEnabled ?? true;
+  }
 
   async health(): Promise<boolean> {
     return true;
@@ -54,6 +71,7 @@ export class MemorySearchAdapter implements SearchAdapter {
     const hits: SearchHit[] = paginated.map((entry) => ({
       ...entry.doc,
       _score: entry.score,
+      _rankingScore: Math.min(1, entry.score / 300),
     }));
 
     // Compute facets from the full (filtered but unpaginated) result set
@@ -94,6 +112,146 @@ export class MemorySearchAdapter implements SearchAdapter {
   async getAllDocuments(): Promise<SearchDocument[]> {
     return [...this.documents.values()];
   }
+
+  // -------------------------------------------------------------------------
+  // Tool index
+  // -------------------------------------------------------------------------
+
+  async initializeTools(): Promise<void> {
+    // Nothing to initialize for the in-memory adapter.
+  }
+
+  async indexTools(documents: ToolDocument[]): Promise<void> {
+    for (const doc of documents) {
+      this.toolDocuments.set(doc.id, doc);
+    }
+  }
+
+  async removeToolsByServer(mcpName: string): Promise<void> {
+    const key = mcpName.toLowerCase();
+    for (const [id, doc] of this.toolDocuments) {
+      if (doc.server_mcp_name.toLowerCase() === key) {
+        this.toolDocuments.delete(id);
+      }
+    }
+  }
+
+  async deleteTools(ids: string[]): Promise<void> {
+    for (const id of ids) this.toolDocuments.delete(id);
+  }
+
+  async searchTools(query: string, options?: ToolSearchOptions): Promise<ToolSearchResult> {
+    const t0 = performance.now();
+    const limit = options?.limit ?? 20;
+    const offset = options?.offset ?? 0;
+
+    let items = [...this.toolDocuments.values()];
+
+    if (options?.serverMcpName) {
+      const key = options.serverMcpName.toLowerCase();
+      items = items.filter((doc) => doc.server_mcp_name.toLowerCase() === key);
+    }
+    if (options?.provider) {
+      const p = options.provider!.toLowerCase();
+      items = items.filter((doc) => (doc.provider ?? "").toLowerCase() === p);
+    }
+    if (options?.tags && options.tags.length > 0) {
+      const requiredTags = options.tags.map((t) => t.toLowerCase());
+      items = items.filter((doc) => requiredTags.every((tag) => doc.tags.includes(tag)));
+    }
+
+    const normalizedQuery = query.trim().toLowerCase().replace(/\s+/g, " ");
+    let scored: Array<{ doc: ToolDocument; score: number }>;
+    if (!normalizedQuery) {
+      scored = items.map((doc) => ({ doc, score: 1 }));
+    } else {
+      scored = items
+        .map((doc) => ({ doc, score: scoreToolDocument(doc, normalizedQuery) }))
+        .filter((entry) => entry.score > 0)
+        .sort((a, b) => b.score - a.score);
+    }
+
+    const total = scored.length;
+    const paginated = scored.slice(offset, offset + limit);
+    const hits: ToolDocumentHit[] = paginated.map((entry, idx) => ({
+      ...entry.doc,
+      _rankingScore: Math.min(1, entry.score / 300),
+      _rank: offset + idx + 1,
+    }));
+
+    return { hits, total, offset, limit, processingTimeMs: performance.now() - t0 };
+  }
+
+  async getToolDocumentCount(): Promise<number> {
+    return this.toolDocuments.size;
+  }
+
+  async clearTools(): Promise<void> {
+    this.toolDocuments.clear();
+  }
+
+  async getAllToolDocuments(): Promise<ToolDocument[]> {
+    return [...this.toolDocuments.values()];
+  }
+
+  async getIndexList(): Promise<IndexListEntry[]> {
+    return [...this.documents.values()].map((doc) => ({
+      id: doc.mcp_name,
+      updated_at: doc.updated_at,
+      content_hash: doc.content_hash,
+      has_vector: doc.has_vector ?? !!doc._vectors,
+    }));
+  }
+
+  async getToolIndexList(): Promise<IndexListEntry[]> {
+    return [...this.toolDocuments.values()].map((doc) => ({
+      id: doc.id,
+      updated_at: doc.updated_at,
+      content_hash: doc.content_hash,
+      has_vector: doc.has_vector ?? !!doc._vectors,
+    }));
+  }
+
+  // -------------------------------------------------------------------------
+  // Embedding metadata (fingerprint)
+  // -------------------------------------------------------------------------
+
+  async readEmbeddingMeta(): Promise<EmbeddingMeta | null> {
+    return this.embeddingMeta;
+  }
+
+  async writeEmbeddingMeta(meta: EmbeddingMeta): Promise<void> {
+    this.embeddingMeta = meta;
+  }
+}
+
+function scoreToolDocument(doc: ToolDocument, query: string): number {
+  const tokens = query.split(" ").filter(Boolean);
+  const searchable = [
+    doc.tool_name,
+    doc.tool_description,
+    doc.compact_schema,
+    doc.server_display_name,
+    doc.tags.join(" "),
+    doc.provider ?? "",
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  for (const token of tokens) {
+    if (!searchable.includes(token)) return 0;
+  }
+
+  let score = 0;
+  if (doc.tool_name === query) score += 500;
+  if (doc.tool_name.startsWith(query)) score += 250;
+  if (doc.tool_name.includes(query)) score += 120;
+  if (doc.tool_description.toLowerCase().includes(query)) score += 60;
+  for (const token of tokens) {
+    if (doc.tool_name.includes(token)) score += 40;
+    if (doc.tool_description.toLowerCase().includes(token)) score += 15;
+  }
+  return score > 0 ? score : 1;
 }
 
 // ---------------------------------------------------------------------------

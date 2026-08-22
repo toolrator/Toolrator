@@ -14,7 +14,7 @@
   <p>
     <a href="https://github.com/toolrator/toolrator"><img src="https://img.shields.io/github/stars/toolrator/toolrator?style=for-the-badge&logo=github&label=Stars&color=2da44e" alt="GitHub Stars" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue?style=for-the-badge" alt="License" /></a>
-    <a href="https://modelcontextprotocol.io/specification/draft"><img src="https://img.shields.io/badge/Protocol-MCP%20Draft%202026--07--28-7c3aed?style=for-the-badge&logo=protocol" alt="Protocol" /></a>
+    <a href="https://modelcontextprotocol.io/specification/2026-07-28"><img src="https://img.shields.io/badge/Protocol-MCP%202026--07--28-7c3aed?style=for-the-badge&logo=protocol" alt="Protocol" /></a>
     <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-%3E%3D%2020-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node" /></a>
   </p>
 
@@ -64,7 +64,7 @@
 
 | | |
 |---|---|
-| **🧠 MCP Draft 2026-07-28** | First-mover on the stateless protocol — SEP-2575, MRTR, Tasks extension, Streamable HTTP |
+| **🧠 MCP 2026-07-28 (official)** | First-mover on the stateless protocol — SEP-2575, MRTR, Tasks extension, Streamable HTTP |
 | **🔌 Zero-Config Setup** | `npx -y @toolrator/toolconnector` — one command, four unified tools, instant discovery |
 | **🔍 Typo-Tolerant Search** | MeiliSearch + ONNX hybrid vector search for finding MCP servers and tools |
 | **🏠 Self-Hostable** | Toolpanel + Toolhub run fully offline — no cloud dependency |
@@ -277,7 +277,7 @@ Add to your MCP client config:
 
 <br/>
 
-The Toolrator OSS stack is built against **MCP Draft 2026-07-28** — the live working draft of the Model Context Protocol. Every applicable feature is implemented and tested.
+The Toolrator OSS stack is built against **MCP 2026-07-28** — the official stable revision of the Model Context Protocol (released 2026-07-28). Every applicable feature is implemented and tested.
 
 <br/>
 
@@ -310,7 +310,7 @@ See **[`packages/toolconnector/MCP-FEATURES.md`](./packages/toolconnector/MCP-FE
 <summary><b>🔄 Legacy compatibility</b></summary>
 <br/>
 
-Servers running `2025-11-25` are handled automatically. The SDK's `versionNegotiation: { mode: 'auto' }` probes via `server/discover` first; if the server doesn't support the draft, it falls back to the `initialize` handshake transparently.
+Servers running `2025-11-25` are handled automatically. The SDK's `versionNegotiation: { mode: 'auto' }` probes via `server/discover` first; if the server doesn't support the `2026-07-28` revision, it falls back to the `initialize` handshake transparently.
 
 </details>
 

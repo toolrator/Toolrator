@@ -1,0 +1,303 @@
+name: Toolhub Perf Eval
+
+on:
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'packages/toolhub/**'
+      - '.github/workflows/perf-eval.yml'
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'packages/toolhub/**'
+      - '.github/workflows/perf-eval.yml'
+  workflow_dispatch:
+    inputs:
+      configs:
+        description: 'Configs to benchmark: JSON array (["1c2g","2c4g"]) or a single name (1c2g)'
+        required: false
+        default: '["1c2g","2c4g"]'
+      update-baseline:
+        description: 'Refresh the checked-in baseline from this run'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: perf-eval-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Decides which resource configs to benchmark and whether to use quick mode:
+  # PRs -> 1c2g quick; push/dispatch -> full matrix (dispatch input overrides).
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      configs: ${{ steps.resolve.outputs.configs }}
+      quick: ${{ steps.resolve.outputs.quick }}
+    steps:
+      - name: Resolve configs and mode
+        id: resolve
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            echo "configs=[\"1c2g\"]" >> "$GITHUB_OUTPUT"
+            echo "quick=true" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ github.event.inputs.configs }}" ]; then
+            INPUT="${{ github.event.inputs.configs }}"
+            case "$INPUT" in
+              \[*) echo "configs=$INPUT" ;;
+              *)   echo "configs=[\"$INPUT\"]" ;;
+            esac
+            echo "quick=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configs=[\"1c2g\",\"2c4g\"]" >> "$GITHUB_OUTPUT"
+            echo "quick=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Benchmarks toolhub inside a resource-constrained job container so the
+  # same limits apply identically on GitHub-hosted runners and via act.
+  perf-eval:
+    name: Perf Eval (${{ matrix.config }})
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        config: ${{ fromJSON(needs.resolve.outputs.configs) }}
+    container:
+      image: node:22-bookworm
+      options: >-
+        --cpus ${{ matrix.config == '1c2g' && '1' || '2' }}
+        --memory ${{ matrix.config == '1c2g' && '2g' || '4g' }}
+    services:
+      meilisearch:
+        image: getmeili/meilisearch:v1.11
+        env:
+          MEILI_NO_ANALYTICS: "true"
+          MEILI_HTTP_ADDR: "0.0.0.0:7702"
+    env:
+      PERF_QUICK: ${{ needs.resolve.outputs.quick }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: packages/toolhub/package-lock.json
+
+      - name: Install Dependencies
+        working-directory: packages/toolhub
+        run: npm ci
+
+      - name: Build Code
+        working-directory: packages/toolhub
+        run: npm run build
+
+      - name: Cache Embedding Model
+        uses: actions/cache@v4
+        with:
+          # @xenova/transformers v2 caches models inside its own package dir.
+          # The cache step must run AFTER npm ci (which wipes node_modules)
+          # and restore the model into the freshly installed tree.
+          path: packages/toolhub/node_modules/@xenova/transformers/.cache
+          key: toolhub-e5-model-${{ runner.os }}-${{ hashFiles('packages/toolhub/package-lock.json') }}
+
+      - name: Run Perf Eval
+        working-directory: packages/toolhub
+        # PR runs are informational (runner speed varies between machines and
+        # GitHub-hosted runners); the hard gate lives on push-to-main where
+        # refresh-* recalibrates and finalize-baseline enforces the scaling
+        # ratio against the committed baseline.
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        run: node tests/perf-eval.mjs --config ${{ matrix.config }} ${{ github.event.inputs.update-baseline == 'true' && '--update-baseline' || '' }}
+        env:
+          MEILI_URL: http://meilisearch:7702
+          TOOLHUB_PORT: "7601"
+          SEARCH_ADMIN_TOKEN: dev-admin-token
+
+      - name: Upload Perf Report
+        if: always()
+        # continue-on-error: act has no artifact service, so the eval result
+        # (the real signal) must not be hidden by an upload failure.
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: search-perf-report-${{ matrix.config }}
+          path: packages/toolhub/search-perf-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  # Refresh the checked-in baseline from constrained runs on main pushes.
+  refresh-1c2g:
+    name: Refresh Baseline (1c2g)
+    needs: perf-eval
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    container:
+      image: node:22-bookworm
+      options: --cpus 1 --memory 2g
+    services:
+      meilisearch:
+        image: getmeili/meilisearch:v1.11
+        env:
+          MEILI_NO_ANALYTICS: "true"
+          MEILI_HTTP_ADDR: "0.0.0.0:7702"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: packages/toolhub/package-lock.json
+
+      - name: Install Dependencies
+        working-directory: packages/toolhub
+        run: npm ci
+
+      - name: Build Code
+        working-directory: packages/toolhub
+        run: npm run build
+
+      - name: Cache Embedding Model
+        uses: actions/cache@v4
+        with:
+          path: packages/toolhub/node_modules/@xenova/transformers/.cache
+          key: toolhub-e5-model-${{ runner.os }}-${{ hashFiles('packages/toolhub/package-lock.json') }}
+
+      - name: Update Baseline (1c2g)
+        working-directory: packages/toolhub
+        run: node tests/perf-eval.mjs --config 1c2g --update-baseline
+        env:
+          MEILI_URL: http://meilisearch:7702
+          TOOLHUB_PORT: "7601"
+          SEARCH_ADMIN_TOKEN: dev-admin-token
+
+      - name: Upload Baseline (1c2g)
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: search-perf-baseline-1c2g
+          path: packages/toolhub/tests/fixtures/perf-baseline.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  refresh-2c4g:
+    name: Refresh Baseline (2c4g)
+    needs: perf-eval
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    container:
+      image: node:22-bookworm
+      options: --cpus 2 --memory 4g
+    services:
+      meilisearch:
+        image: getmeili/meilisearch:v1.11
+        env:
+          MEILI_NO_ANALYTICS: "true"
+          MEILI_HTTP_ADDR: "0.0.0.0:7702"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: packages/toolhub/package-lock.json
+
+      - name: Install Dependencies
+        working-directory: packages/toolhub
+        run: npm ci
+
+      - name: Build Code
+        working-directory: packages/toolhub
+        run: npm run build
+
+      - name: Cache Embedding Model
+        uses: actions/cache@v4
+        with:
+          path: packages/toolhub/node_modules/@xenova/transformers/.cache
+          key: toolhub-e5-model-${{ runner.os }}-${{ hashFiles('packages/toolhub/package-lock.json') }}
+
+      - name: Update Baseline (2c4g)
+        working-directory: packages/toolhub
+        run: node tests/perf-eval.mjs --config 2c4g --update-baseline
+        env:
+          MEILI_URL: http://meilisearch:7702
+          TOOLHUB_PORT: "7601"
+          SEARCH_ADMIN_TOKEN: dev-admin-token
+
+      - name: Upload Baseline (2c4g)
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: search-perf-baseline-2c4g
+          path: packages/toolhub/tests/fixtures/perf-baseline.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  # Merges the two refreshed baseline sections, sanity-checks the
+  # cross-config scaling ratio and commits the result.
+  finalize-baseline:
+    name: Finalize Baseline
+    needs: [refresh-1c2g, refresh-2c4g]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download baselines
+        uses: actions/download-artifact@v4
+        with:
+          pattern: search-perf-baseline-*
+          path: baseline-downloads
+
+      - name: Download reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: search-perf-report-*
+          path: report-downloads
+
+      - name: Merge baselines
+        run: |
+          node -e "
+            const fs = require('fs');
+            const a = JSON.parse(fs.readFileSync('baseline-downloads/search-perf-baseline-1c2g/perf-baseline.json', 'utf8'));
+            const b = JSON.parse(fs.readFileSync('baseline-downloads/search-perf-baseline-2c4g/perf-baseline.json', 'utf8'));
+            fs.writeFileSync('packages/toolhub/tests/fixtures/perf-baseline.json', JSON.stringify({ ...a, ...b }, null, 2) + '\n');
+          "
+
+      - name: Compare config scaling
+        run: |
+          node packages/toolhub/tests/perf-eval.mjs \
+            --compare report-downloads/search-perf-report-2c4g/search-perf-report.json \
+                     report-downloads/search-perf-report-1c2g/search-perf-report.json
+
+      - name: Commit Updated Baseline
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packages/toolhub/tests/fixtures/perf-baseline.json
+          if git diff --cached --quiet; then
+            echo "Baseline unchanged — nothing to commit."
+          else
+            git commit -m "chore(toolhub): update perf eval baseline"
+            git push
+          fi

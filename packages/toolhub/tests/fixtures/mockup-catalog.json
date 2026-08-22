@@ -1,0 +1,2669 @@
+[
+  {
+    "slug": "weather",
+    "mcp_name": "mock/weather-service",
+    "display_name": "Weather Service",
+    "description": "Real-time weather data for any city: current conditions, 7-day forecasts, severe weather alerts, and UV index reports. Perfect for travel apps, agriculture dashboards, and personal assistants.",
+    "tags": [
+      "weather",
+      "forecast",
+      "climate",
+      "location"
+    ],
+    "provider": "openweather",
+    "docs_url": "https://openweathermap.org/api",
+    "homepage_url": "https://openweathermap.org",
+    "base_path": "/weather/mcp",
+    "tools": [
+      {
+        "name": "get_current_conditions",
+        "description": "Get the current weather conditions (temperature, humidity, wind, pressure) for a city",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string",
+              "description": "City name, e.g. Berlin"
+            },
+            "country_code": {
+              "type": "string",
+              "description": "ISO 3166 country code, e.g. DE (optional)"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      },
+      {
+        "name": "get_forecast",
+        "description": "Get the 7-day weather forecast for a city",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string",
+              "description": "City name"
+            },
+            "days": {
+              "type": "integer",
+              "description": "Number of forecast days (1-7), default 3"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      },
+      {
+        "name": "get_weather_alerts",
+        "description": "List active severe weather alerts (storms, floods, heat) for a region",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "region": {
+              "type": "string",
+              "description": "Region or country code"
+            }
+          },
+          "required": [
+            "region"
+          ]
+        }
+      },
+      {
+        "name": "get_uv_index",
+        "description": "Get the current UV index and sun exposure guidance for a city",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string",
+              "description": "City name"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "stocks",
+    "mcp_name": "mock/stock-market",
+    "display_name": "Stock Market Quotes",
+    "description": "Live stock quotes, historical price charts, company fundamentals, and daily market movers. Ideal for portfolio dashboards, trading bots, and financial research agents.",
+    "tags": [
+      "finance",
+      "stocks",
+      "trading",
+      "market"
+    ],
+    "provider": "finnhub",
+    "docs_url": "https://finnhub.io/docs/api",
+    "homepage_url": "https://finnhub.io",
+    "base_path": "/stocks/mcp",
+    "tools": [
+      {
+        "name": "get_stock_quote",
+        "description": "Get the current price and day change for a stock ticker",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "symbol": {
+              "type": "string",
+              "description": "Stock ticker symbol, e.g. AAPL"
+            }
+          },
+          "required": [
+            "symbol"
+          ]
+        }
+      },
+      {
+        "name": "get_historical_prices",
+        "description": "Get historical daily OHLC prices for a ticker over a date range",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "symbol": {
+              "type": "string",
+              "description": "Stock ticker symbol"
+            },
+            "from": {
+              "type": "string",
+              "description": "Start date YYYY-MM-DD"
+            },
+            "to": {
+              "type": "string",
+              "description": "End date YYYY-MM-DD"
+            }
+          },
+          "required": [
+            "symbol",
+            "from",
+            "to"
+          ]
+        }
+      },
+      {
+        "name": "get_company_profile",
+        "description": "Get company fundamentals: sector, market cap, employees, IPO date",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "symbol": {
+              "type": "string",
+              "description": "Stock ticker symbol"
+            }
+          },
+          "required": [
+            "symbol"
+          ]
+        }
+      },
+      {
+        "name": "get_market_movers",
+        "description": "Get the top gainers and losers in a market for the day",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "exchange": {
+              "type": "string",
+              "description": "Exchange, e.g. NASDAQ"
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "slug": "postgres",
+    "mcp_name": "mock/postgres-query",
+    "display_name": "PostgreSQL Query Runner",
+    "description": "Read-only SQL access to a PostgreSQL database: list tables, inspect schemas, run SELECT queries, and execute full-text search. Built for analytics agents and BI assistants.",
+    "tags": [
+      "database",
+      "postgres",
+      "sql",
+      "analytics"
+    ],
+    "provider": "supabase",
+    "docs_url": "https://supabase.com/docs",
+    "homepage_url": "https://supabase.com",
+    "base_path": "/postgres/mcp",
+    "tools": [
+      {
+        "name": "run_read_query",
+        "description": "Execute a read-only SQL SELECT query and return the rows",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "The SQL SELECT statement"
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Maximum rows to return, default 100"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "list_tables",
+        "description": "List all tables in the public schema",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "get_table_schema",
+        "description": "Describe the columns and types of a table",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "table": {
+              "type": "string",
+              "description": "Table name"
+            }
+          },
+          "required": [
+            "table"
+          ]
+        }
+      },
+      {
+        "name": "full_text_search",
+        "description": "Search a table using PostgreSQL full-text search over text columns",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "table": {
+              "type": "string",
+              "description": "Table name"
+            },
+            "query": {
+              "type": "string",
+              "description": "Search terms"
+            },
+            "columns": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Columns to search"
+            }
+          },
+          "required": [
+            "table",
+            "query"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "github",
+    "mcp_name": "mock/github-tools",
+    "display_name": "GitHub Repository Assistant",
+    "description": "Search repositories and code, read issues and pull requests, inspect commits, and manage stars. Streamlines developer workflows for open-source triage and code review agents.",
+    "tags": [
+      "github",
+      "code",
+      "git",
+      "repos"
+    ],
+    "provider": "github",
+    "docs_url": "https://docs.github.com/rest",
+    "homepage_url": "https://github.com",
+    "base_path": "/github/mcp",
+    "tools": [
+      {
+        "name": "search_repos",
+        "description": "Search GitHub repositories by keyword, language, and stars",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search keywords"
+            },
+            "language": {
+              "type": "string",
+              "description": "Filter by language"
+            },
+            "min_stars": {
+              "type": "integer",
+              "description": "Minimum star count"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "get_repo",
+        "description": "Get repository details: owner, description, stars, forks, license",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "owner": {
+              "type": "string",
+              "description": "Repository owner"
+            },
+            "repo": {
+              "type": "string",
+              "description": "Repository name"
+            }
+          },
+          "required": [
+            "owner",
+            "repo"
+          ]
+        }
+      },
+      {
+        "name": "create_issue",
+        "description": "Create a new issue in a repository",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "owner": {
+              "type": "string",
+              "description": "Repository owner"
+            },
+            "repo": {
+              "type": "string",
+              "description": "Repository name"
+            },
+            "title": {
+              "type": "string",
+              "description": "Issue title"
+            },
+            "body": {
+              "type": "string",
+              "description": "Issue body"
+            }
+          },
+          "required": [
+            "owner",
+            "repo",
+            "title"
+          ]
+        }
+      },
+      {
+        "name": "list_pull_requests",
+        "description": "List open pull requests for a repository",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "owner": {
+              "type": "string",
+              "description": "Repository owner"
+            },
+            "repo": {
+              "type": "string",
+              "description": "Repository name"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "open",
+                "closed",
+                "all"
+              ],
+              "description": "PR state"
+            }
+          },
+          "required": [
+            "owner",
+            "repo"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "slack",
+    "mcp_name": "mock/slack-workspace",
+    "display_name": "Slack Workspace Tools",
+    "description": "Read and send Slack messages, list channels, and look up users. Connects assistants to team communication for notifications, digests, and triage bots.",
+    "tags": [
+      "slack",
+      "messaging",
+      "team",
+      "chat"
+    ],
+    "provider": "slack",
+    "docs_url": "https://api.slack.com/docs",
+    "homepage_url": "https://slack.com",
+    "base_path": "/slack/mcp",
+    "tools": [
+      {
+        "name": "list_channels",
+        "description": "List channels in the workspace with member counts",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "types": {
+              "type": "string",
+              "description": "Channel types: public_channel, private_channel"
+            }
+          }
+        }
+      },
+      {
+        "name": "post_message",
+        "description": "Post a message to a Slack channel",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "channel": {
+              "type": "string",
+              "description": "Channel name or ID"
+            },
+            "text": {
+              "type": "string",
+              "description": "Message text"
+            },
+            "thread_ts": {
+              "type": "string",
+              "description": "Reply in an existing thread (optional)"
+            }
+          },
+          "required": [
+            "channel",
+            "text"
+          ]
+        }
+      },
+      {
+        "name": "get_channel_history",
+        "description": "Get recent messages from a channel",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "channel": {
+              "type": "string",
+              "description": "Channel name or ID"
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Number of messages, default 20"
+            }
+          },
+          "required": [
+            "channel"
+          ]
+        }
+      },
+      {
+        "name": "lookup_user",
+        "description": "Find a workspace user by name or email",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Name or email"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "email",
+    "mcp_name": "mock/email-assistant",
+    "display_name": "Email Assistant",
+    "description": "Compose, send, search, and summarize emails. Draft replies with tone control and keep your inbox organized with labels and folders.",
+    "tags": [
+      "email",
+      "gmail",
+      "communication",
+      "inbox"
+    ],
+    "provider": "gmail",
+    "docs_url": "https://developers.google.com/gmail/api",
+    "homepage_url": "https://gmail.com",
+    "base_path": "/email/mcp",
+    "tools": [
+      {
+        "name": "send_email",
+        "description": "Send an email to one or more recipients",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "to": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Recipient addresses"
+            },
+            "subject": {
+              "type": "string",
+              "description": "Email subject"
+            },
+            "body": {
+              "type": "string",
+              "description": "Email body (plain text or markdown)"
+            },
+            "cc": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "CC addresses"
+            }
+          },
+          "required": [
+            "to",
+            "subject",
+            "body"
+          ]
+        }
+      },
+      {
+        "name": "search_emails",
+        "description": "Search the inbox by query, sender, or label",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search query"
+            },
+            "from": {
+              "type": "string",
+              "description": "Sender email"
+            },
+            "label": {
+              "type": "string",
+              "description": "Gmail label"
+            },
+            "max_results": {
+              "type": "integer",
+              "description": "Default 20"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "draft_reply",
+        "description": "Generate a draft reply for a given email thread",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "thread_id": {
+              "type": "string",
+              "description": "Email thread ID"
+            },
+            "tone": {
+              "type": "string",
+              "enum": [
+                "professional",
+                "friendly",
+                "concise"
+              ],
+              "description": "Reply tone"
+            }
+          },
+          "required": [
+            "thread_id"
+          ]
+        }
+      },
+      {
+        "name": "summarize_thread",
+        "description": "Summarize a long email thread into key points",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "thread_id": {
+              "type": "string",
+              "description": "Email thread ID"
+            }
+          },
+          "required": [
+            "thread_id"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "calendar",
+    "mcp_name": "mock/calendar-scheduler",
+    "display_name": "Calendar & Scheduling",
+    "description": "Manage events and availability: list schedules, find free time slots, create and update events, and send meeting invites. Great for meeting-bot and planner agents.",
+    "tags": [
+      "calendar",
+      "scheduling",
+      "meetings",
+      "productivity"
+    ],
+    "provider": "google-calendar",
+    "docs_url": "https://developers.google.com/calendar",
+    "homepage_url": "https://calendar.google.com",
+    "base_path": "/calendar/mcp",
+    "tools": [
+      {
+        "name": "list_events",
+        "description": "List calendar events for a date range",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "calendar_id": {
+              "type": "string",
+              "description": "Calendar ID (default primary)"
+            },
+            "from": {
+              "type": "string",
+              "description": "Start date-time ISO"
+            },
+            "to": {
+              "type": "string",
+              "description": "End date-time ISO"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      },
+      {
+        "name": "find_free_slots",
+        "description": "Find free time slots across calendars for a duration",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "attendees": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Attendee emails"
+            },
+            "duration_minutes": {
+              "type": "integer",
+              "description": "Meeting length"
+            },
+            "date": {
+              "type": "string",
+              "description": "Day YYYY-MM-DD"
+            }
+          },
+          "required": [
+            "attendees",
+            "duration_minutes"
+          ]
+        }
+      },
+      {
+        "name": "create_event",
+        "description": "Create a calendar event with attendees",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "summary": {
+              "type": "string",
+              "description": "Event title"
+            },
+            "start": {
+              "type": "string",
+              "description": "Start date-time ISO"
+            },
+            "end": {
+              "type": "string",
+              "description": "End date-time ISO"
+            },
+            "attendees": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Attendee emails"
+            }
+          },
+          "required": [
+            "summary",
+            "start",
+            "end"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "translate",
+    "mcp_name": "mock/translator",
+    "display_name": "Language Translator",
+    "description": "Translate text between 40+ languages, detect source languages automatically, and list supported languages. Powering localization, support, and content pipelines.",
+    "tags": [
+      "translation",
+      "language",
+      "localization",
+      "text"
+    ],
+    "provider": "deepl",
+    "docs_url": "https://developers.deepl.com/docs",
+    "homepage_url": "https://deepl.com",
+    "base_path": "/translate/mcp",
+    "tools": [
+      {
+        "name": "translate_text",
+        "description": "Translate text into a target language",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "description": "Text to translate"
+            },
+            "target_lang": {
+              "type": "string",
+              "description": "Target language code, e.g. DE, ES, FR"
+            },
+            "source_lang": {
+              "type": "string",
+              "description": "Source language code (optional, auto-detected)"
+            }
+          },
+          "required": [
+            "text",
+            "target_lang"
+          ]
+        }
+      },
+      {
+        "name": "detect_language",
+        "description": "Detect the language of a text snippet",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "description": "Text to detect"
+            }
+          },
+          "required": [
+            "text"
+          ]
+        }
+      },
+      {
+        "name": "list_languages",
+        "description": "List all supported languages and their codes",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    ]
+  },
+  {
+    "slug": "imagegen",
+    "mcp_name": "mock/image-generator",
+    "display_name": "AI Image Generator",
+    "description": "Generate, edit, and upscale images from text prompts. Supports style presets, aspect ratios, and outpainting for creative and marketing workflows.",
+    "tags": [
+      "images",
+      "generation",
+      "ai",
+      "creative"
+    ],
+    "provider": "stability",
+    "docs_url": "https://platform.stability.ai/docs",
+    "homepage_url": "https://stability.ai",
+    "base_path": "/imagegen/mcp",
+    "tools": [
+      {
+        "name": "generate_image",
+        "description": "Generate an image from a text prompt",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "prompt": {
+              "type": "string",
+              "description": "Image description"
+            },
+            "style": {
+              "type": "string",
+              "enum": [
+                "photorealistic",
+                "anime",
+                "oil-painting",
+                "3d"
+              ],
+              "description": "Style preset"
+            },
+            "aspect_ratio": {
+              "type": "string",
+              "enum": [
+                "1:1",
+                "16:9",
+                "9:16"
+              ],
+              "description": "Aspect ratio"
+            }
+          },
+          "required": [
+            "prompt"
+          ]
+        }
+      },
+      {
+        "name": "edit_image",
+        "description": "Edit an existing image with a mask and prompt",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "image_id": {
+              "type": "string",
+              "description": "Image ID to edit"
+            },
+            "prompt": {
+              "type": "string",
+              "description": "Edit instruction"
+            },
+            "mask_id": {
+              "type": "string",
+              "description": "Optional mask image ID"
+            }
+          },
+          "required": [
+            "image_id",
+            "prompt"
+          ]
+        }
+      },
+      {
+        "name": "upscale_image",
+        "description": "Upscale an image 2x or 4x",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "image_id": {
+              "type": "string",
+              "description": "Image ID"
+            },
+            "scale": {
+              "type": "integer",
+              "enum": [
+                2,
+                4
+              ],
+              "description": "Upscale factor"
+            }
+          },
+          "required": [
+            "image_id"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "scraper",
+    "mcp_name": "mock/web-scraper",
+    "display_name": "Web Scraper",
+    "description": "Scrape web pages and extract structured content: articles, links, tables, and metadata. JavaScript-rendered pages supported. For research, monitoring, and content ingestion.",
+    "tags": [
+      "scraping",
+      "web",
+      "crawler",
+      "extraction"
+    ],
+    "provider": "firecrawl",
+    "docs_url": "https://docs.firecrawl.dev",
+    "homepage_url": "https://firecrawl.dev",
+    "base_path": "/scraper/mcp",
+    "tools": [
+      {
+        "name": "scrape_url",
+        "description": "Scrape a URL and return the cleaned page content",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "Page URL"
+            },
+            "format": {
+              "type": "string",
+              "enum": [
+                "markdown",
+                "html",
+                "text"
+              ],
+              "description": "Output format"
+            }
+          },
+          "required": [
+            "url"
+          ]
+        }
+      },
+      {
+        "name": "extract_article",
+        "description": "Extract the main article from a news or blog URL",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "Article URL"
+            }
+          },
+          "required": [
+            "url"
+          ]
+        }
+      },
+      {
+        "name": "extract_links",
+        "description": "Extract all outbound links from a page",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "Page URL"
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Max links, default 50"
+            }
+          },
+          "required": [
+            "url"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "news",
+    "mcp_name": "mock/news-aggregator",
+    "display_name": "News Aggregator",
+    "description": "Top headlines, keyword search across thousands of news sources, and per-source feeds. Keeps briefings, alerts, and research agents up to date.",
+    "tags": [
+      "news",
+      "headlines",
+      "media",
+      "current-events"
+    ],
+    "provider": "newsapi",
+    "docs_url": "https://newsapi.org/docs",
+    "homepage_url": "https://newsapi.org",
+    "base_path": "/news/mcp",
+    "tools": [
+      {
+        "name": "get_top_headlines",
+        "description": "Get top headlines by country or category",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "country": {
+              "type": "string",
+              "description": "ISO country code, e.g. us"
+            },
+            "category": {
+              "type": "string",
+              "enum": [
+                "business",
+                "technology",
+                "sports",
+                "science",
+                "health"
+              ],
+              "description": "News category"
+            }
+          }
+        }
+      },
+      {
+        "name": "search_news",
+        "description": "Search news articles by keyword across all sources",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search keywords"
+            },
+            "from": {
+              "type": "string",
+              "description": "Start date YYYY-MM-DD"
+            },
+            "sort_by": {
+              "type": "string",
+              "enum": [
+                "relevancy",
+                "popularity",
+                "publishedAt"
+              ]
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "list_sources",
+        "description": "List available news sources with categories",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "category": {
+              "type": "string",
+              "description": "Filter by category"
+            },
+            "language": {
+              "type": "string",
+              "description": "Filter by language code"
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "slug": "crypto",
+    "mcp_name": "mock/crypto-prices",
+    "display_name": "Crypto Market Data",
+    "description": "Real-time cryptocurrency prices, market caps, trending coins, and portfolio value tracking. For trading bots, portfolio trackers, and market analysis.",
+    "tags": [
+      "crypto",
+      "bitcoin",
+      "blockchain",
+      "finance"
+    ],
+    "provider": "coingecko",
+    "docs_url": "https://docs.coingecko.com",
+    "homepage_url": "https://coingecko.com",
+    "base_path": "/crypto/mcp",
+    "tools": [
+      {
+        "name": "get_coin_price",
+        "description": "Get the current price of a cryptocurrency in multiple currencies",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "coin": {
+              "type": "string",
+              "description": "Coin ID, e.g. bitcoin"
+            },
+            "vs_currencies": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Currencies, e.g. usd, eur"
+            }
+          },
+          "required": [
+            "coin"
+          ]
+        }
+      },
+      {
+        "name": "get_market_data",
+        "description": "Get market cap, volume, and supply data for a coin",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "coin": {
+              "type": "string",
+              "description": "Coin ID"
+            }
+          },
+          "required": [
+            "coin"
+          ]
+        }
+      },
+      {
+        "name": "get_trending",
+        "description": "Get the top trending coins of the day",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    ]
+  },
+  {
+    "slug": "travel",
+    "mcp_name": "mock/travel-planner",
+    "display_name": "Travel Planner",
+    "description": "Search flights, compare hotel availability, and get destination insights. Builds itineraries with real pricing data for booking and planning agents.",
+    "tags": [
+      "travel",
+      "flights",
+      "hotels",
+      "booking"
+    ],
+    "provider": "amadeus",
+    "docs_url": "https://developers.amadeus.com",
+    "homepage_url": "https://amadeus.com",
+    "base_path": "/travel/mcp",
+    "tools": [
+      {
+        "name": "search_flights",
+        "description": "Search flights between two cities on a date",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "origin": {
+              "type": "string",
+              "description": "IATA code, e.g. BER"
+            },
+            "destination": {
+              "type": "string",
+              "description": "IATA code, e.g. JFK"
+            },
+            "date": {
+              "type": "string",
+              "description": "Departure date YYYY-MM-DD"
+            },
+            "adults": {
+              "type": "integer",
+              "description": "Passenger count"
+            }
+          },
+          "required": [
+            "origin",
+            "destination",
+            "date"
+          ]
+        }
+      },
+      {
+        "name": "search_hotels",
+        "description": "Search hotel availability and prices in a city",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "city_code": {
+              "type": "string",
+              "description": "IATA city code"
+            },
+            "check_in": {
+              "type": "string",
+              "description": "Check-in date"
+            },
+            "check_out": {
+              "type": "string",
+              "description": "Check-out date"
+            },
+            "guests": {
+              "type": "integer",
+              "description": "Guest count"
+            }
+          },
+          "required": [
+            "city_code",
+            "check_in",
+            "check_out"
+          ]
+        }
+      },
+      {
+        "name": "get_destination_info",
+        "description": "Get travel tips, climate, and best season for a destination",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string",
+              "description": "City name"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "nutrition",
+    "mcp_name": "mock/nutrition-tracker",
+    "display_name": "Nutrition & Food Data",
+    "description": "Search food items and get detailed nutrition facts: calories, macros, vitamins, and allergens. Powers meal planning and health coaching assistants.",
+    "tags": [
+      "nutrition",
+      "food",
+      "health",
+      "calories"
+    ],
+    "provider": "edamam",
+    "docs_url": "https://developer.edamam.com",
+    "homepage_url": "https://edamam.com",
+    "base_path": "/nutrition/mcp",
+    "tools": [
+      {
+        "name": "search_foods",
+        "description": "Search for foods and get basic nutrition info",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Food name, e.g. avocado"
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Max results, default 10"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "get_nutrition_info",
+        "description": "Get full nutrition facts for a food item",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "food_id": {
+              "type": "string",
+              "description": "Food ID from search"
+            },
+            "quantity": {
+              "type": "number",
+              "description": "Amount, default 100"
+            },
+            "unit": {
+              "type": "string",
+              "description": "Unit, e.g. g, oz, cup"
+            }
+          },
+          "required": [
+            "food_id"
+          ]
+        }
+      },
+      {
+        "name": "analyze_meal",
+        "description": "Analyze a meal description and return macro breakdown",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "meal": {
+              "type": "string",
+              "description": "Meal description, e.g. '2 eggs, toast, coffee'"
+            }
+          },
+          "required": [
+            "meal"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "music",
+    "mcp_name": "mock/music-discovery",
+    "display_name": "Music Discovery",
+    "description": "Search tracks, albums, and artists; fetch audio features and create playlists. For recommendation engines, party bots, and DJ assistants.",
+    "tags": [
+      "music",
+      "spotify",
+      "playlists",
+      "audio"
+    ],
+    "provider": "spotify",
+    "docs_url": "https://developer.spotify.com/documentation/web-api",
+    "homepage_url": "https://spotify.com",
+    "base_path": "/music/mcp",
+    "tools": [
+      {
+        "name": "search_tracks",
+        "description": "Search for tracks by title and artist",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search query"
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Max results, default 10"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "get_artist_info",
+        "description": "Get artist details, genres, and top tracks",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "artist_id": {
+              "type": "string",
+              "description": "Spotify artist ID"
+            }
+          },
+          "required": [
+            "artist_id"
+          ]
+        }
+      },
+      {
+        "name": "create_playlist",
+        "description": "Create a playlist and add tracks to it",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Playlist name"
+            },
+            "description": {
+              "type": "string",
+              "description": "Playlist description"
+            },
+            "track_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Track IDs"
+            }
+          },
+          "required": [
+            "name"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "codeanalysis",
+    "mcp_name": "mock/code-analyzer",
+    "display_name": "Code Analyzer",
+    "description": "Analyze code quality, detect security vulnerabilities, and suggest refactors. Reviews snippets or whole repositories for linting and CI pipeline agents.",
+    "tags": [
+      "code",
+      "analysis",
+      "security",
+      "refactoring"
+    ],
+    "provider": "sonarqube",
+    "docs_url": "https://docs.sonarsource.com/sonarqube",
+    "homepage_url": "https://sonarsource.com",
+    "base_path": "/codeanalysis/mcp",
+    "tools": [
+      {
+        "name": "analyze_code",
+        "description": "Analyze a code snippet for quality issues and bugs",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "description": "Source code"
+            },
+            "language": {
+              "type": "string",
+              "description": "Language, e.g. typescript, python"
+            }
+          },
+          "required": [
+            "code"
+          ]
+        }
+      },
+      {
+        "name": "find_security_issues",
+        "description": "Scan code for common security vulnerabilities (injection, XSS, secrets)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "description": "Source code"
+            }
+          },
+          "required": [
+            "code"
+          ]
+        }
+      },
+      {
+        "name": "suggest_refactor",
+        "description": "Suggest refactoring improvements for a code snippet",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "description": "Source code"
+            }
+          },
+          "required": [
+            "code"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "security",
+    "mcp_name": "mock/security-scanner",
+    "display_name": "Security Scanner",
+    "description": "Scan URLs for malware and phishing, check password breaches, and audit dependency vulnerabilities. Hardens CI pipelines and trust-and-safety workflows.",
+    "tags": [
+      "security",
+      "scanning",
+      "malware",
+      "vulnerabilities"
+    ],
+    "provider": "urlscan",
+    "docs_url": "https://urlscan.io/docs/api",
+    "homepage_url": "https://urlscan.io",
+    "base_path": "/security/mcp",
+    "tools": [
+      {
+        "name": "scan_url",
+        "description": "Scan a URL for malware, phishing, and reputation issues",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "URL to scan"
+            }
+          },
+          "required": [
+            "url"
+          ]
+        }
+      },
+      {
+        "name": "check_password_breach",
+        "description": "Check if a password hash appears in known breach datasets",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "password": {
+              "type": "string",
+              "description": "Password to check (hashed locally)"
+            }
+          },
+          "required": [
+            "password"
+          ]
+        }
+      },
+      {
+        "name": "scan_dependencies",
+        "description": "Audit a package manifest for known vulnerable dependencies",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "manifest": {
+              "type": "string",
+              "description": "Path to package.json or requirements.txt"
+            }
+          },
+          "required": [
+            "manifest"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "smarthome",
+    "mcp_name": "mock/smart-home",
+    "display_name": "Smart Home Control",
+    "description": "Control smart home devices: lights, thermostats, locks, and sensors. Query device states and automate routines for voice and assistant integrations.",
+    "tags": [
+      "iot",
+      "smart-home",
+      "automation",
+      "devices"
+    ],
+    "provider": "home-assistant",
+    "docs_url": "https://developers.home-assistant.io/docs/api/rest",
+    "homepage_url": "https://home-assistant.io",
+    "base_path": "/smarthome/mcp",
+    "tools": [
+      {
+        "name": "list_devices",
+        "description": "List all smart home devices grouped by area",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "area": {
+              "type": "string",
+              "description": "Filter by area, e.g. living room"
+            }
+          }
+        }
+      },
+      {
+        "name": "get_device_status",
+        "description": "Get the current state of a device",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "device_id": {
+              "type": "string",
+              "description": "Device ID"
+            }
+          },
+          "required": [
+            "device_id"
+          ]
+        }
+      },
+      {
+        "name": "control_device",
+        "description": "Send a command to a device (on/off, set temperature, lock)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "device_id": {
+              "type": "string",
+              "description": "Device ID"
+            },
+            "command": {
+              "type": "string",
+              "description": "Command, e.g. turn_on, set_temperature"
+            },
+            "value": {
+              "type": "string",
+              "description": "Command value, e.g. 21"
+            }
+          },
+          "required": [
+            "device_id",
+            "command"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "analytics",
+    "mcp_name": "mock/web-analytics",
+    "display_name": "Web Analytics",
+    "description": "Website traffic analytics: page views, user retention, conversion funnels, and top referrers. For growth teams, dashboards, and reporting bots.",
+    "tags": [
+      "analytics",
+      "traffic",
+      "metrics",
+      "dashboard"
+    ],
+    "provider": "plausible",
+    "docs_url": "https://plausible.io/docs",
+    "homepage_url": "https://plausible.io",
+    "base_path": "/analytics/mcp",
+    "tools": [
+      {
+        "name": "get_page_visits",
+        "description": "Get page view and visitor counts for a date range",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "site_id": {
+              "type": "string",
+              "description": "Site domain"
+            },
+            "from": {
+              "type": "string",
+              "description": "Start date YYYY-MM-DD"
+            },
+            "to": {
+              "type": "string",
+              "description": "End date YYYY-MM-DD"
+            }
+          },
+          "required": [
+            "site_id",
+            "from",
+            "to"
+          ]
+        }
+      },
+      {
+        "name": "get_top_pages",
+        "description": "Get the most visited pages for a period",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "site_id": {
+              "type": "string",
+              "description": "Site domain"
+            },
+            "period": {
+              "type": "string",
+              "enum": [
+                "day",
+                "7d",
+                "30d"
+              ],
+              "description": "Reporting period"
+            }
+          },
+          "required": [
+            "site_id"
+          ]
+        }
+      },
+      {
+        "name": "get_conversion_funnel",
+        "description": "Get conversion funnel stats for configured goals",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "site_id": {
+              "type": "string",
+              "description": "Site domain"
+            },
+            "goal": {
+              "type": "string",
+              "description": "Goal name"
+            }
+          },
+          "required": [
+            "site_id",
+            "goal"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "shop",
+    "mcp_name": "mock/shop-catalog",
+    "display_name": "E-Commerce Catalog",
+    "description": "Product search, inventory levels, prices, and reviews from an online store. Powers shopping assistants, price comparison, and storefront chatbots.",
+    "tags": [
+      "ecommerce",
+      "shopping",
+      "products",
+      "inventory"
+    ],
+    "provider": "shopify",
+    "docs_url": "https://shopify.dev/docs/api",
+    "homepage_url": "https://shopify.com",
+    "base_path": "/shop/mcp",
+    "tools": [
+      {
+        "name": "search_products",
+        "description": "Search products by keyword, category, or price range",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search keyword"
+            },
+            "category": {
+              "type": "string",
+              "description": "Category filter"
+            },
+            "max_price": {
+              "type": "number",
+              "description": "Maximum price"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "get_product",
+        "description": "Get product details: price, stock, description, reviews",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "product_id": {
+              "type": "string",
+              "description": "Product ID"
+            }
+          },
+          "required": [
+            "product_id"
+          ]
+        }
+      },
+      {
+        "name": "check_inventory",
+        "description": "Check inventory availability across warehouses",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "product_id": {
+              "type": "string",
+              "description": "Product ID"
+            }
+          },
+          "required": [
+            "product_id"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "docs",
+    "mcp_name": "mock/wiki-docs",
+    "display_name": "Wiki & Documentation",
+    "description": "Create, read, and search wiki pages and documentation. Organize knowledge bases with tags and backlinks for research and note-taking agents.",
+    "tags": [
+      "docs",
+      "wiki",
+      "knowledge-base",
+      "notes"
+    ],
+    "provider": "notion",
+    "docs_url": "https://developers.notion.com",
+    "homepage_url": "https://notion.com",
+    "base_path": "/docs/mcp",
+    "tools": [
+      {
+        "name": "search_pages",
+        "description": "Search wiki pages by keyword or tag",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search keyword"
+            },
+            "tag": {
+              "type": "string",
+              "description": "Filter by tag"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "get_page",
+        "description": "Get the full content of a wiki page",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "page_id": {
+              "type": "string",
+              "description": "Page ID"
+            }
+          },
+          "required": [
+            "page_id"
+          ]
+        }
+      },
+      {
+        "name": "create_page",
+        "description": "Create a new wiki page with markdown content",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Page title"
+            },
+            "content": {
+              "type": "string",
+              "description": "Markdown content"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Page tags"
+            }
+          },
+          "required": [
+            "title",
+            "content"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "crm",
+    "mcp_name": "mock/sales-crm",
+    "display_name": "Sales CRM",
+    "description": "Manage contacts, deals, and leads: search records, update pipelines, and log activities. For sales assistants and pipeline analytics agents.",
+    "tags": [
+      "crm",
+      "sales",
+      "contacts",
+      "deals"
+    ],
+    "provider": "hubspot",
+    "docs_url": "https://developers.hubspot.com/docs/api/crm",
+    "homepage_url": "https://hubspot.com",
+    "base_path": "/crm/mcp",
+    "tools": [
+      {
+        "name": "search_contacts",
+        "description": "Search CRM contacts by name, email, or company",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search query"
+            },
+            "company": {
+              "type": "string",
+              "description": "Filter by company"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "get_deal",
+        "description": "Get deal details: stage, value, owner, close date",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "deal_id": {
+              "type": "string",
+              "description": "Deal ID"
+            }
+          },
+          "required": [
+            "deal_id"
+          ]
+        }
+      },
+      {
+        "name": "create_lead",
+        "description": "Create a new lead from form data",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "email": {
+              "type": "string",
+              "description": "Lead email"
+            },
+            "name": {
+              "type": "string",
+              "description": "Lead name"
+            },
+            "company": {
+              "type": "string",
+              "description": "Lead company"
+            },
+            "source": {
+              "type": "string",
+              "description": "Lead source"
+            }
+          },
+          "required": [
+            "email"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "marketing",
+    "mcp_name": "mock/marketing-studio",
+    "display_name": "Marketing Studio",
+    "description": "Create and manage email campaigns, segment audiences, and pull campaign analytics. For marketing automation and growth agents.",
+    "tags": [
+      "marketing",
+      "campaigns",
+      "email-marketing",
+      "audiences"
+    ],
+    "provider": "mailchimp",
+    "docs_url": "https://mailchimp.com/developer",
+    "homepage_url": "https://mailchimp.com",
+    "base_path": "/marketing/mcp",
+    "tools": [
+      {
+        "name": "create_campaign",
+        "description": "Create an email campaign with subject and content",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Campaign name"
+            },
+            "subject": {
+              "type": "string",
+              "description": "Email subject"
+            },
+            "list_id": {
+              "type": "string",
+              "description": "Audience list ID"
+            }
+          },
+          "required": [
+            "name",
+            "subject"
+          ]
+        }
+      },
+      {
+        "name": "get_campaign_stats",
+        "description": "Get open, click, and conversion stats for a campaign",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "campaign_id": {
+              "type": "string",
+              "description": "Campaign ID"
+            }
+          },
+          "required": [
+            "campaign_id"
+          ]
+        }
+      },
+      {
+        "name": "segment_audience",
+        "description": "Create an audience segment by criteria",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Segment name"
+            },
+            "criteria": {
+              "type": "string",
+              "description": "Criteria, e.g. 'opened in last 30 days'"
+            }
+          },
+          "required": [
+            "name",
+            "criteria"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "gaming",
+    "mcp_name": "mock/game-library",
+    "display_name": "Game Library",
+    "description": "Search games, get player counts and achievements, and look up game details and ratings. For gaming assistants and review agents.",
+    "tags": [
+      "gaming",
+      "games",
+      "steam",
+      "players"
+    ],
+    "provider": "steam",
+    "docs_url": "https://partner.steamgames.com/doc/webapi",
+    "homepage_url": "https://store.steampowered.com",
+    "base_path": "/gaming/mcp",
+    "tools": [
+      {
+        "name": "search_games",
+        "description": "Search games by title, genre, or tags",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search query"
+            },
+            "genre": {
+              "type": "string",
+              "description": "Genre filter"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "get_game_info",
+        "description": "Get game details: description, price, rating, platforms",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "game_id": {
+              "type": "string",
+              "description": "Game ID"
+            }
+          },
+          "required": [
+            "game_id"
+          ]
+        }
+      },
+      {
+        "name": "get_player_stats",
+        "description": "Get player counts and online statistics for a game",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "game_id": {
+              "type": "string",
+              "description": "Game ID"
+            }
+          },
+          "required": [
+            "game_id"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "fitness",
+    "mcp_name": "mock/fitness-tracker",
+    "display_name": "Fitness Tracker",
+    "description": "Track workouts, steps, sleep, and meals. Generate training plans and weekly summaries for health and wellness coaching agents.",
+    "tags": [
+      "fitness",
+      "health",
+      "workouts",
+      "tracking"
+    ],
+    "provider": "fitbit",
+    "docs_url": "https://dev.fitbit.com/build/reference/web-api",
+    "homepage_url": "https://fitbit.com",
+    "base_path": "/fitness/mcp",
+    "tools": [
+      {
+        "name": "get_activity_summary",
+        "description": "Get daily activity summary: steps, calories, distance",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "date": {
+              "type": "string",
+              "description": "Date YYYY-MM-DD, default today"
+            }
+          }
+        }
+      },
+      {
+        "name": "create_workout_plan",
+        "description": "Generate a workout plan for a goal and fitness level",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "goal": {
+              "type": "string",
+              "enum": [
+                "strength",
+                "cardio",
+                "weight-loss",
+                "flexibility"
+              ],
+              "description": "Fitness goal"
+            },
+            "level": {
+              "type": "string",
+              "enum": [
+                "beginner",
+                "intermediate",
+                "advanced"
+              ],
+              "description": "Fitness level"
+            },
+            "days_per_week": {
+              "type": "integer",
+              "description": "Training days"
+            }
+          },
+          "required": [
+            "goal"
+          ]
+        }
+      },
+      {
+        "name": "track_meal",
+        "description": "Log a meal and get its estimated calories",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "meal": {
+              "type": "string",
+              "description": "Meal description"
+            },
+            "timestamp": {
+              "type": "string",
+              "description": "Meal time ISO"
+            }
+          },
+          "required": [
+            "meal"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "websearch",
+    "mcp_name": "mock/web-search",
+    "display_name": "Web Search",
+    "description": "Full web search with page summaries and image search. Returns fresh results with citations for research assistants and answer engines.",
+    "tags": [
+      "search",
+      "web",
+      "research",
+      "summaries"
+    ],
+    "provider": "brave",
+    "docs_url": "https://api.search.brave.com",
+    "homepage_url": "https://search.brave.com",
+    "base_path": "/websearch/mcp",
+    "tools": [
+      {
+        "name": "web_search",
+        "description": "Search the web and return ranked results with snippets",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search query"
+            },
+            "count": {
+              "type": "integer",
+              "description": "Result count, default 10"
+            },
+            "country": {
+              "type": "string",
+              "description": "Country filter"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "get_page_summary",
+        "description": "Fetch and summarize a web page",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "Page URL"
+            }
+          },
+          "required": [
+            "url"
+          ]
+        }
+      },
+      {
+        "name": "search_images",
+        "description": "Search for images by query",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Image query"
+            },
+            "count": {
+              "type": "integer",
+              "description": "Result count, default 10"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "files",
+    "mcp_name": "mock/file-storage",
+    "display_name": "Cloud File Storage",
+    "description": "List, upload, download, and search files in cloud storage. Manage folders and sharing for document-management and backup agents.",
+    "tags": [
+      "storage",
+      "files",
+      "cloud",
+      "dropbox"
+    ],
+    "provider": "dropbox",
+    "docs_url": "https://www.dropbox.com/developers",
+    "homepage_url": "https://dropbox.com",
+    "base_path": "/files/mcp",
+    "tools": [
+      {
+        "name": "list_files",
+        "description": "List files and folders in a directory",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Folder path, default root"
+            },
+            "recursive": {
+              "type": "boolean",
+              "description": "List recursively"
+            }
+          }
+        }
+      },
+      {
+        "name": "search_files",
+        "description": "Search files by name or content query",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search query"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "get_file_metadata",
+        "description": "Get file metadata: size, modified date, sharing status",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File path"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "notify",
+    "mcp_name": "mock/notification-hub",
+    "display_name": "Notification Hub",
+    "description": "Send push notifications, SMS, and email digests; manage subscriber preferences and delivery logs. For alerting systems and engagement agents.",
+    "tags": [
+      "notifications",
+      "push",
+      "alerts",
+      "sms"
+    ],
+    "provider": "onesignal",
+    "docs_url": "https://documentation.onesignal.com",
+    "homepage_url": "https://onesignal.com",
+    "base_path": "/notify/mcp",
+    "tools": [
+      {
+        "name": "send_push",
+        "description": "Send a push notification to a segment or user",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Notification title"
+            },
+            "message": {
+              "type": "string",
+              "description": "Notification body"
+            },
+            "target": {
+              "type": "string",
+              "description": "User ID or segment name"
+            }
+          },
+          "required": [
+            "title",
+            "message"
+          ]
+        }
+      },
+      {
+        "name": "send_sms",
+        "description": "Send an SMS message to a phone number",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "phone": {
+              "type": "string",
+              "description": "E.164 phone number"
+            },
+            "message": {
+              "type": "string",
+              "description": "SMS body"
+            }
+          },
+          "required": [
+            "phone",
+            "message"
+          ]
+        }
+      },
+      {
+        "name": "get_delivery_logs",
+        "description": "Get delivery status logs for recent notifications",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "integer",
+              "description": "Log count, default 50"
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "slug": "seo",
+    "mcp_name": "mock/seo-audit",
+    "display_name": "SEO Audit Tools",
+    "description": "Run technical SEO audits: crawl sites, analyze keywords, check backlinks, and review rankings. For content teams and SEO specialists.",
+    "tags": [
+      "seo",
+      "audit",
+      "keywords",
+      "backlinks"
+    ],
+    "provider": "ahrefs",
+    "docs_url": "https://ahrefs.com/api",
+    "homepage_url": "https://ahrefs.com",
+    "base_path": "/seo/mcp",
+    "tools": [
+      {
+        "name": "run_site_audit",
+        "description": "Run a technical SEO audit on a domain",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "domain": {
+              "type": "string",
+              "description": "Domain to audit"
+            },
+            "depth": {
+              "type": "integer",
+              "description": "Crawl depth, default 10"
+            }
+          },
+          "required": [
+            "domain"
+          ]
+        }
+      },
+      {
+        "name": "get_keyword_data",
+        "description": "Get search volume, difficulty, and CPC for a keyword",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "keyword": {
+              "type": "string",
+              "description": "Keyword"
+            },
+            "country": {
+              "type": "string",
+              "description": "Country code"
+            }
+          },
+          "required": [
+            "keyword"
+          ]
+        }
+      },
+      {
+        "name": "get_backlinks",
+        "description": "Get the backlink profile of a domain",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "domain": {
+              "type": "string",
+              "description": "Domain"
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Max links, default 20"
+            }
+          },
+          "required": [
+            "domain"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "podcast",
+    "mcp_name": "mock/podcast-tools",
+    "display_name": "Podcast Tools",
+    "description": "Search podcasts and episodes, fetch transcripts, and get show metadata. For content research, clip creation, and recommendation agents.",
+    "tags": [
+      "podcast",
+      "audio",
+      "transcripts",
+      "shows"
+    ],
+    "provider": "listennotes",
+    "docs_url": "https://www.listennotes.com/api",
+    "homepage_url": "https://www.listennotes.com",
+    "base_path": "/podcast/mcp",
+    "tools": [
+      {
+        "name": "search_podcasts",
+        "description": "Search podcasts by title, topic, or language",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search query"
+            },
+            "language": {
+              "type": "string",
+              "description": "Language code"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "search_episodes",
+        "description": "Search episodes by keyword across podcasts",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search query"
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Max results, default 10"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "get_episode_transcript",
+        "description": "Get the transcript of an episode",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "episode_id": {
+              "type": "string",
+              "description": "Episode ID"
+            }
+          },
+          "required": [
+            "episode_id"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "career",
+    "mcp_name": "mock/career-tools",
+    "display_name": "Career & Job Search",
+    "description": "Search job listings, parse and tailor resumes, and prepare interview questions. For job-search assistants and career coaches.",
+    "tags": [
+      "career",
+      "jobs",
+      "resume",
+      "hiring"
+    ],
+    "provider": "linkedin",
+    "docs_url": "https://learn.microsoft.com/en-us/linkedin",
+    "homepage_url": "https://linkedin.com",
+    "base_path": "/career/mcp",
+    "tools": [
+      {
+        "name": "search_jobs",
+        "description": "Search job listings by title, location, and seniority",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Job title or keyword"
+            },
+            "location": {
+              "type": "string",
+              "description": "Location"
+            },
+            "remote": {
+              "type": "boolean",
+              "description": "Remote only"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "tailor_resume",
+        "description": "Tailor a resume to match a job description",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "resume": {
+              "type": "string",
+              "description": "Resume text"
+            },
+            "job_description": {
+              "type": "string",
+              "description": "Job description"
+            }
+          },
+          "required": [
+            "resume",
+            "job_description"
+          ]
+        }
+      },
+      {
+        "name": "prepare_interview",
+        "description": "Generate interview questions and tips for a role",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "description": "Job role"
+            },
+            "years_experience": {
+              "type": "integer",
+              "description": "Years of experience"
+            }
+          },
+          "required": [
+            "role"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "slug": "qr",
+    "mcp_name": "mock/qr-tools",
+    "display_name": "QR & Link Tools",
+    "description": "Generate QR codes, shorten and expand URLs, and track link analytics. For marketing materials, signage, and sharing workflows.",
+    "tags": [
+      "qr",
+      "links",
+      "shortener",
+      "tracking"
+    ],
+    "provider": "rebrandly",
+    "docs_url": "https://developers.rebrandly.com",
+    "homepage_url": "https://rebrandly.com",
+    "base_path": "/qr/mcp",
+    "tools": [
+      {
+        "name": "generate_qr",
+        "description": "Generate a QR code for a URL or text",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "content": {
+              "type": "string",
+              "description": "URL or text to encode"
+            },
+            "size": {
+              "type": "integer",
+              "description": "Pixel size, default 256"
+            }
+          },
+          "required": [
+            "content"
+          ]
+        }
+      },
+      {
+        "name": "shorten_url",
+        "description": "Shorten a URL with a custom slug option",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "Long URL"
+            },
+            "slug": {
+              "type": "string",
+              "description": "Custom short slug"
+            }
+          },
+          "required": [
+            "url"
+          ]
+        }
+      },
+      {
+        "name": "get_link_stats",
+        "description": "Get click statistics for a shortened link",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "link_id": {
+              "type": "string",
+              "description": "Short link ID"
+            }
+          },
+          "required": [
+            "link_id"
+          ]
+        }
+      }
+    ]
+  }
+]

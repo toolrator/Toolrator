@@ -44,3 +44,9 @@ toolpanel-config/
 bug_issue_changes.txt
 packages/toolconnector/plan-07-14
 packages/toolconnector/local-search-engines.json
+
+
+# Generated eval artifacts
+packages/toolhub/search-eval-report.json
+packages/toolhub/search-perf-report.json
+packages/toolhub/tests/fixtures/real/

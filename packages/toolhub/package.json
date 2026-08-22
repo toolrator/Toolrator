@@ -34,10 +34,18 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "dev": "tsx src/server.ts",
+    "dev": "node --env-file-if-exists=.env --import tsx src/server.ts",
     "prestart": "npm run build",
-    "start": "node dist/server.js",
-    "test": "node --import tsx --test tests/**/*.test.ts"
+    "start": "node --env-file-if-exists=.env dist/server.js",
+    "test": "node --import tsx --test tests/**/*.test.ts",
+    "eval:search": "node --env-file-if-exists=.env tests/search-eval.mjs",
+    "eval:search:update": "node --env-file-if-exists=.env tests/search-eval.mjs --update-baseline",
+    "eval:search:real": "node --env-file-if-exists=.env tests/search-eval.mjs --catalog real",
+    "eval:search:real:update": "node --env-file-if-exists=.env tests/search-eval.mjs --catalog real --update-baseline",
+    "eval:perf": "node tests/perf-eval.mjs --config host",
+    "eval:perf:constrained": "node tests/perf-eval.mjs --config 2c4g",
+    "eval:perf:quick": "node tests/perf-eval.mjs --config 1c2g --quick",
+    "eval:perf:update": "node tests/perf-eval.mjs --config 2c4g --update-baseline"
   },
   "engines": {
     "node": ">=20"
