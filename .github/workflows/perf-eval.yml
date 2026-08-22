@@ -264,13 +264,13 @@ jobs:
           fetch-depth: 0
 
       - name: Download baselines
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: search-perf-baseline-*
           path: baseline-downloads
 
       - name: Download reports
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: search-perf-report-*
           path: report-downloads
