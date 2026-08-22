@@ -86,6 +86,7 @@ jobs:
           TOOLHUB_PORT: "7600"
           SEARCH_ADMIN_TOKEN: dev-admin-token
           TOOLHUB_EMBEDDING_PROVIDER: local
+          TOOLHUB_EMBEDDING_BATCH_SIZE: "32"
 
       - name: Upload Eval Report
         if: always() && steps.changes.outputs.relevant == 'true'
@@ -153,6 +154,7 @@ jobs:
           TOOLHUB_PORT: "7600"
           SEARCH_ADMIN_TOKEN: dev-admin-token
           TOOLHUB_EMBEDDING_PROVIDER: local
+          TOOLHUB_EMBEDDING_BATCH_SIZE: "32"
 
       - name: Commit Updated Baseline
         run: |

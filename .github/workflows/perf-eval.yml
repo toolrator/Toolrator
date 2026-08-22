@@ -121,6 +121,7 @@ jobs:
           TOOLHUB_PORT: "7601"
           SEARCH_ADMIN_TOKEN: dev-admin-token
           TOOLHUB_EMBEDDING_PROVIDER: local
+          TOOLHUB_EMBEDDING_BATCH_SIZE: "32"
 
       - name: Upload Perf Report
         if: always()
@@ -183,6 +184,7 @@ jobs:
           TOOLHUB_PORT: "7601"
           SEARCH_ADMIN_TOKEN: dev-admin-token
           TOOLHUB_EMBEDDING_PROVIDER: local
+          TOOLHUB_EMBEDDING_BATCH_SIZE: "32"
 
       - name: Upload Baseline (1c2g)
         continue-on-error: true
@@ -241,6 +243,7 @@ jobs:
           TOOLHUB_PORT: "7601"
           SEARCH_ADMIN_TOKEN: dev-admin-token
           TOOLHUB_EMBEDDING_PROVIDER: local
+          TOOLHUB_EMBEDDING_BATCH_SIZE: "32"
 
       - name: Upload Baseline (2c4g)
         continue-on-error: true
