@@ -254,7 +254,8 @@ describe("Toolhub - In-Memory Tests", () => {
     // Simulate a meta left over from a previous embedding provider: after a
     // full reindex with the current config, health must stop reporting
     // needsReindex (the old behavior preserved the stale active fingerprint
-    // forever, so the control plane would reindex on every cooldown cycle).
+    // forever, so an orchestrator polling health would reindex on every
+    // cooldown cycle).
     await adapter.writeEmbeddingMeta({
       id: "embedding",
       current_fingerprint: "stale-current",

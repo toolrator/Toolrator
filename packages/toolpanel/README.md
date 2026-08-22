@@ -1,6 +1,6 @@
 # Toolpanel
 
-A small, open-source, self-hostable **control panel** for the [toolconnector](../packages/toolconnector) and [Toolhub](../packages/toolhub). It is a drop-in replacement for the upstream SaaS endpoint — point your toolconnector's `CONNECTOR_UPSTREAM_URL` at toolpanel, and your local AI agent gets its discovery configuration from this panel instead of the upstream SaaS.
+A small, open-source, self-hostable **control panel** for the [toolconnector](../toolconnector) and [Toolhub](../toolhub). It is a drop-in replacement for the upstream SaaS endpoint — point your toolconnector's `CONNECTOR_UPSTREAM_URL` at toolpanel, and your local AI agent gets its discovery configuration from this panel instead of the upstream SaaS.
 
 Toolpanel is intentionally **lightweight**: a single Node process, Hono HTTP server, server-rendered HTML, zero database, zero build pipeline besides `tsc`. It mirrors only the **communication surface** toolconnector actually consumes (auth/device-flow, verify-key, search-engine config, the canonical search schema, and the implicit-default search proxy) plus a simple admin UI for Toolhub.
 
@@ -34,7 +34,7 @@ export CONNECTOR_API_KEY=toolpanel-local
 npx -y @toolrator/toolconnector
 ```
 
-You also need a running [Toolhub](../packages/toolhub) for the Search UI and admin pages to be useful:
+You also need a running [Toolhub](../toolhub) for the Search UI and admin pages to be useful:
 
 ```bash
 cd packages/toolhub
@@ -89,7 +89,7 @@ List, add, edit, delete, reindex MCP servers — all proxied to `${SEARCH_ENGINE
 - Reindex all: `POST /admin/reindex` with the current dump
 - Health pill: `GET /health`
 
-Document schema (per the [Toolhub README](../packages/toolhub/README.md)):
+Document schema (per the [Toolhub README](../toolhub/README.md)):
 
 | Field | Required | Notes |
 |---|---|---|
@@ -108,7 +108,7 @@ Document schema (per the [Toolhub README](../packages/toolhub/README.md)):
 
 ## Auth / Device flow (toolconnector ↔ toolpanel)
 
-toolconnector's `manage_auth` tool implements the [device flow](../packages/toolconnector/README.md#-timed-passwordless-device-flow-auth). Toolpanel implements the server side:
+toolconnector's `manage_auth` tool implements the [device flow](../toolconnector/README.md#-timed-passwordless-device-flow-auth). Toolpanel implements the server side:
 
 ```
 Agent: manage_auth action=start_device_flow
@@ -178,7 +178,7 @@ The probe path is published here as a stable contract — do not rename it witho
 
 ---
 
-
+### Environment Variables
 
 | Variable | Default | Description |
 |---|---|---|

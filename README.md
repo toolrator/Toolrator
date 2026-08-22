@@ -12,7 +12,7 @@
 
   <!-- Top Badges Row -->
   <p>
-    <a href="https://github.com/toolrator/toolrator"><img src="https://img.shields.io/github/stars/toolrator/toolrator?style=for-the-badge&logo=github&label=Stars&color=2da44e" alt="GitHub Stars" /></a>
+    <a href="https://github.com/toolrator/Toolrator"><img src="https://img.shields.io/github/stars/toolrator/Toolrator?style=for-the-badge&logo=github&label=Stars&color=2da44e" alt="GitHub Stars" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue?style=for-the-badge" alt="License" /></a>
     <a href="https://modelcontextprotocol.io/specification/2026-07-28"><img src="https://img.shields.io/badge/Protocol-MCP%202026--07--28-7c3aed?style=for-the-badge&logo=protocol" alt="Protocol" /></a>
     <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-%3E%3D%2020-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node" /></a>
@@ -26,9 +26,9 @@
 
   <!-- CI Badges -->
   <p>
-    <img src="https://img.shields.io/github/actions/workflow/status/toolrator/toolrator/.github/workflows/toolconnector-ci.yml?style=flat-square&label=toolconnector%20CI" alt="toolconnector CI" />
-    <img src="https://img.shields.io/github/actions/workflow/status/toolrator/toolrator/.github/workflows/toolhub-ci.yml?style=flat-square&label=toolhub%20CI" alt="toolhub CI" />
-    <img src="https://img.shields.io/github/actions/workflow/status/toolrator/toolrator/.github/workflows/toolpanel-ci.yml?style=flat-square&label=toolpanel%20CI" alt="toolpanel CI" />
+    <img src="https://img.shields.io/github/actions/workflow/status/toolrator/Toolrator/.github/workflows/toolconnector-ci.yml?style=flat-square&label=toolconnector%20CI" alt="toolconnector CI" />
+    <img src="https://img.shields.io/github/actions/workflow/status/toolrator/Toolrator/.github/workflows/toolhub-ci.yml?style=flat-square&label=toolhub%20CI" alt="toolhub CI" />
+    <img src="https://img.shields.io/github/actions/workflow/status/toolrator/Toolrator/.github/workflows/toolpanel-ci.yml?style=flat-square&label=toolpanel%20CI" alt="toolpanel CI" />
   </p>
 </div>
 
@@ -69,7 +69,7 @@
 | **🔍 Typo-Tolerant Search** | MeiliSearch + ONNX hybrid vector search for finding MCP servers and tools |
 | **🏠 Self-Hostable** | Toolpanel + Toolhub run fully offline — no cloud dependency |
 | **📋 4-Tool Surface** | Minimal context window footprint: search, inspect, execute, auth, bookmarks |
-| **🔄 Auto-Fallback** | Works with both `2026-07-28` draft and legacy `2025-11-25` servers |
+| **🔄 Auto-Fallback** | Works with both `2026-07-28` and legacy `2025-11-25` servers |
 
 <br/>
 
@@ -112,7 +112,7 @@ This repository publishes the open-source client and discovery infrastructure fo
 ### 🔌 `@toolrator/toolconnector`
 
 [![npm](https://img.shields.io/npm/v/@toolrator/toolconnector?style=flat-square&logo=npm)](https://www.npmjs.com/package/@toolrator/toolconnector)
-[![Tests](https://img.shields.io/github/actions/workflow/status/toolrator/toolrator/.github/workflows/toolconnector-ci.yml?style=flat-square&label=tests)](https://github.com/toolrator/toolrator/actions)
+[![Tests](https://img.shields.io/github/actions/workflow/status/toolrator/Toolrator/.github/workflows/toolconnector-ci.yml?style=flat-square&label=tests)](https://github.com/toolrator/Toolrator/actions)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
 
 **The universal MCP adapter.** A stdio server that exposes 4 unified tools to any MCP-compatible AI client:
@@ -436,7 +436,7 @@ We welcome contributions from **humans and AI agents** alike.
 <br/>
 
 - **Docs**: [`CONTRIBUTING.md`](./CONTRIBUTING.md) · [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md)
-- **Issues**: [GitHub Issues](https://github.com/toolrator/toolrator/issues)
+- **Issues**: [GitHub Issues](https://github.com/toolrator/Toolrator/issues)
 - **Security**: `security@toolrator.com`
 
 </details>

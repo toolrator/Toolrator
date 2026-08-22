@@ -20,7 +20,7 @@
   "homepage": "https://toolrator.com",
   "repository": {
     "type": "git",
-    "url": "https://github.com/toolrator/toolrator.git",
+    "url": "https://github.com/toolrator/Toolrator.git",
     "directory": "packages/toolconnector"
   },
   "publishConfig": {

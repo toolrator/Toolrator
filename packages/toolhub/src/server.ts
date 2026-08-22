@@ -208,8 +208,8 @@ export function createApp(
 
   /**
    * GET /admin/index
-   * Minimal metadata of all indexed documents (servers + tools). Used by the
-   * enterprise incremental sync to diff against the database cheaply.
+   * Minimal metadata of all indexed documents (servers + tools). Lets an
+   * external orchestrator cheaply diff its own database against the index.
    */
   admin.get("/index", async (c) => {
     try {

@@ -1,7 +1,7 @@
 # MCP Feature Compliance — Toolconnector
 
 > **Protocol**: MCP 2026-07-28 (Official — released 2026-07-28)  
-> **SDK**: `@modelcontextprotocol/server` + `@modelcontextprotocol/client` v2 (stable)  
+> **SDK**: `@modelcontextprotocol/server` + `@modelcontextprotocol/client` v2 (pinned `^2.0.0-beta.3` in `package.json`)  
 > **Last updated**: 2026-08-18
 
 This document tracks every MCP 2026-07-28 protocol feature and whether it is implemented in the toolconnector. The toolconnector acts as both:
@@ -41,7 +41,7 @@ This document tracks every MCP 2026-07-28 protocol feature and whether it is imp
 |---|---------|----------|--------|----------|-------|
 | 2.1 | Streamable HTTP transport (primary) | — | ✅ | `mcp-connection.ts` | Already the primary transport. |
 | 2.2 | `Mcp-Method` and `Mcp-Name` request headers | SEP-2243 | ✅ | `mcp-connection.ts` | Added automatically by SDK v2. |
-| 2.3 | `x-mcp-header` custom headers from tool parameters | SEP-2243 | ➖ | — | This is a server-side concern. Toolconnector as a client passes them automatically. |
+| 2.3 | `x-mcp-header` custom headers from tool parameters | SEP-2243 | ➖ | — | Server-side concern; not used. The `mcp_server` tool accepts no header parameters, so custom headers are never forwarded. |
 | 2.4 | Remove SSE stream resumability (`Last-Event-ID`) | SEP-2575 | ✅ | `mcp-connection.ts` | We don't use SSE resumability. |
 | 2.5 | SSE transport (deprecated, 12-month window) | SEP-2596 | ✅ | `mcp-connection.ts` | Supported as fallback. Will be removed when deprecated period ends. |
 
@@ -95,7 +95,7 @@ This document tracks every MCP 2026-07-28 protocol feature and whether it is imp
 
 | # | Feature | Spec Ref | Status | Location | Notes |
 |---|---------|----------|--------|----------|-------|
-| 7.1 | `-32002` → `-32602` (resource not found → Invalid Params) | SEP-2164 | ✅ | `errors.ts` | Mapped to `resource_not_found`. |
+| 7.1 | `-32602` Invalid Params → `resource_not_found` | SEP-2164 | ✅ | `errors.ts` | Mapped to `resource_not_found`. (`-32002` is not handled in this repo.) |
 | 7.2 | `-32020` HeaderMismatch error | — | ✅ | `errors.ts` | Mapped to `header_mismatch`. |
 | 7.3 | `-32021` MissingRequiredClientCapability error | — | ➖ | — | Translated by SDK 
 | 7.4 | `-32022` UnsupportedProtocolVersion error | — | ✅ | `errors.ts` | Mapped to `unsupported_protocol_version`. |
@@ -117,8 +117,8 @@ This document tracks every MCP 2026-07-28 protocol feature and whether it is imp
 | # | Feature | Spec Ref | Status | Location | Notes |
 |---|---------|----------|--------|----------|-------|
 | 9.1 | JSON Schema 2020-12 (default if no `$schema` field) | SEP-2106 | ✅ | — | Toolconnector passes schemas through. |
-| 9.2 | `outputSchema` on tool definitions | SEP-2106 | ✅ | `tools.ts` | Displayed when inspecting tools. |
-| 9.3 | `structuredContent` in tool results | SEP-2106 | ✅ | `tools.ts` | Returned in raw JSON result payload. |
+| 9.2 | `outputSchema` on tool definitions | SEP-2106 | ❌ | — | Not emitted. Tools register `inputSchema` only; upstream `outputSchema`s pass through untouched. |
+| 9.3 | `structuredContent` in tool results | SEP-2106 | ✅ | `tools.ts` | Passed through unchanged when the upstream returns it; no explicit handling. |
 | 9.4 | Do NOT auto-dereference external `$ref` URIs | SEP-2106 | ✅ | — | We don't dereference schemas. |
 
 ---
@@ -154,9 +154,9 @@ This document tracks every MCP 2026-07-28 protocol feature and whether it is imp
 | 12.3 | `McpError` → JSON-RPC error classification | ✅ | `errors.ts` | Uses standard JSON-RPC error codes and structured error mapping. |
 | 12.4 | `StdioServerTransport` → `@modelcontextprotocol/server/stdio` | ✅ | `index.ts` | Updated. |
 | 12.5 | `Client` → `@modelcontextprotocol/client` | ✅ | `mcp-connection.ts` | Updated. |
-| 12.6 | `SSEClientTransport` removal | ✅ | `mcp-connection.ts` | Maintained as fallback on client. |
+| 12.6 | `SSEClientTransport` (deprecated) | ✅ | `mcp-connection.ts` | Kept as a client fallback for legacy servers; to be removed when the deprecation window ends. |
 | 12.7 | `zod ^3.23.0` → `zod ^4.2.0` | ✅ | `package.json`, `tools.ts` | Updated to Zod v4. |
-| 12.8 | `extra` → `ctx` (handler context) | ✅ | `index.ts` | Updated context argument usage. |
+| 12.8 | Handler context argument | ✅ | `tools.ts` | SDK v2 passes a context argument; this codebase still names it `extra` in tool handlers. |
 
 ---
 

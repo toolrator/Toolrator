@@ -6,17 +6,20 @@ Thank you for considering contributing! This document covers the workflow for th
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/toolrator/toolrator.git
-cd toolrator
+git clone https://github.com/toolrator/Toolrator.git
+cd Toolrator
 
-# 2. Install dependencies (per package — no root install needed)
-cd packages/toolconnector && npm install
-cd ../toolhub && npm install
-cd ../toolpanel && npm install
+# 2. Install dependencies — EITHER once at the root (npm workspaces):
+npm install
+# ...or per package, if you prefer isolated installs:
+# cd packages/toolconnector && npm install
+# cd ../toolhub && npm install
+# cd ../toolpanel && npm install
 
 # 3. Run tests
+npm test            # runs every package's test suite via workspaces
+# or a single package:
 cd packages/toolconnector && npm test
-cd ../toolhub && npm test
 ```
 
 ## Development Conventions

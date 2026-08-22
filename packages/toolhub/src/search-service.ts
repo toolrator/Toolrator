@@ -121,9 +121,9 @@ export class SearchService {
    *
    * The previous implementation preserved the *old* active fingerprint from
    * the stored meta, so after any provider/model/dimension change /health
-   * kept reporting needsReindex forever and the control plane would reindex
-   * on every cooldown cycle. After a full reindex the index IS built with the
-   * current config, so active must equal current.
+   * kept reporting needsReindex forever and an orchestrator polling health
+   * would reindex on every cooldown cycle. After a full reindex the index IS
+   * built with the current config, so active must equal current.
    */
   async recordEmbeddingFingerprint(): Promise<void> {
     const currentFingerprint = computeEmbeddingFingerprint(this.config);

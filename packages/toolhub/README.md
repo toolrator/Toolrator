@@ -8,7 +8,7 @@ A fast, typo-tolerant search engine for discovering MCP servers. Part of the too
 - **Semantic / hybrid search** — queries are vectorized by a pluggable embedding provider (opt-in: local ONNX `Xenova/multilingual-e5-small`, or any OpenAI-compatible API — Cloudflare Workers AI, OpenRouter, ... see the embedding models guide below) and fused with lexical results via MeiliSearch's hybrid search. Embeddings are **off by default** (`TOOLHUB_EMBEDDING_PROVIDER` unset → pure lexical search); semantic search activates only when a provider is configured. Lexical-only fallback when no vector is available (e.g. single short keywords, the in-memory backend, or an embedding failure).
 - **Tool-level ranking (D7 tool index)** — every tool from `capabilities.tools` is indexed as its own document (`mcp_tools`) and ranked by RRF against the server surface. Tool evidence rolls up into server cards (bounded: a tool cluster can never outrank the direct rank-1 server) and `toolHits` returns the matched tools with compact schema summaries.
 - **Heuristic intent classification** — each query is labeled `server` or `tool` (with confidence) via exact matches, action-cue/tool-name-overlap rules and a multi-tool aggregation rule; the `maxTools` cap widens on tool intent.
-- **Embedding fingerprint & auto-reindex signal** — the active embedding configuration (provider, model, dims, budget, pooling, indexer version) is recorded as a fingerprint. `/health` reports it alongside the fingerprint the index was last built with, and `needsReindex` flips when they diverge — the enterprise control plane reindexes automatically (cooldown-protected).
+- **Embedding fingerprint & auto-reindex signal** — the active embedding configuration (provider, model, dims, budget, pooling, indexer version) is recorded as a fingerprint. `/health` reports it alongside the fingerprint the index was last built with, and `needsReindex` flips when they diverge — an external orchestrator can watch that flag and reindex automatically (cooldown-protected).
 - **Faceted filtering** by tags and provider
 - **Pluggable adapter architecture** — swap search backends without changing business logic
 - **Admin API** for document ingestion with strict validation and normalization
@@ -296,7 +296,7 @@ Every model embeds into its **own vector space** — vectors from different mode
 
 1. Change the env vars (see above).
 2. **Reindex** (`POST /admin/reindex`). When the dimensionality changed, MeiliSearch rejects the old vector settings; toolhub detects this and automatically rebuilds the settings and wipes incompatible vectors (self-healing, verified with 384→1024 switches). The full reindex records the new embedding fingerprint.
-3. **Or let the control plane do it** — `/health` exposes `embedding.currentFingerprint` vs `activeFingerprint` and `needsReindex`. When they diverge, the enterprise cron reindexes automatically (cooldown-protected) — restarting toolhub after a config change is enough to trigger it.
+3. **Or automate it** — `/health` exposes `embedding.currentFingerprint` vs `activeFingerprint` and `needsReindex`. An external cron watching these fields can reindex automatically (cooldown-protected) — restarting toolhub after a config change is enough to flag the divergence.
 4. Start queries. During the transition, or if any single embedding fails, that query degrades to lexical-only search — never an error.
 
 #### Evaluations & baselines
@@ -319,7 +319,7 @@ Every model embeds into its **own vector space** — vectors from different mode
 - **Hybrid search & adaptive semantic ratio** — on MeiliSearch, vector and lexical matches are fused with an adaptive `semanticRatio` based on query length (0.3 for short queries $\le$ 2 words, 0.7 for long natural-language queries $\ge$ 5 words, 0.5 default).
 - **Merge** — server and tool rankings are fused with RRF (k=60): `score = 0.55 · rrf(serverRank) + 0.45 · rollup(toolRanks)`, where the rollup weights the top-5 tool ranks with a [1, .75, .55, .4, .3] decay and is **capped at `1/(k+1)`** so tool clusters can refine a server card but never outrank the direct rank-1 server.
 - **Intent** — evaluated in order: exact server match → `server` (0.95); exact tool match → `tool` (0.95); specific tool (top tool ≥ 0.35, beats the competing servers by the margin, action cue or tool-name overlap) → `tool`; 3+ strong (≥ 0.3) tool hits from one server in the top-10 → `server` (aggregation intent); otherwise the fallback. When the top server IS the tool's home server, the margin is measured against the best *other* server with a stricter threshold (+0.05), because a tool always embeds close to its own server.
-- **Fingerprint** — `v2|provider|model|dims|maxInputChars|charsPerToken|minChunkChars|poolingMode|indexer-2|compact-schema-1|toolIndexName` is recorded at each full reindex. Changing the embedding config (model, pooling, budget, ...) makes `/health` report `needsReindex: true`; the enterprise control plane reindexes automatically (15-min cooldown, 60-min backoff).
+- **Fingerprint** — `v2|provider|model|dims|maxInputChars|charsPerToken|minChunkChars|poolingMode|indexer-2|compact-schema-1|toolIndexName` is recorded at each full reindex. Changing the embedding config (model, pooling, budget, ...) makes `/health` report `needsReindex: true`; an external orchestrator can reindex automatically on that signal (15-min cooldown, 60-min backoff are sensible guardrails).
 
 #### Troubleshooting
 
@@ -338,14 +338,14 @@ Every model embeds into its **own vector space** — vectors from different mode
 
 ```bash
 # Build
-docker build -t @toolrator/toolhub .
+docker build -t toolrator-toolhub .
 
 # Run with MeiliSearch
 docker run -p 7600:7600 \
   -e MEILI_URL=http://meilisearch:7700 \
   -e MEILI_ADMIN_KEY=your-key \
   -e SEARCH_ADMIN_TOKEN=your-admin-token \
-  @toolrator/toolhub
+  toolrator-toolhub
 ```
 
 ### Monitoring Container Stats

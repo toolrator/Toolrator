@@ -80,7 +80,7 @@ jobs:
       - name: Run Search Quality Eval
         if: steps.changes.outputs.relevant == 'true'
         working-directory: packages/toolhub
-        run: npm run test:search-eval
+        run: npm run eval:search
         env:
           MEILI_URL: http://127.0.0.1:7700
           TOOLHUB_PORT: "7600"
@@ -146,7 +146,7 @@ jobs:
 
       - name: Run Search Quality Eval (update baseline)
         working-directory: packages/toolhub
-        run: npm run search-eval:update
+        run: npm run eval:search:update
         env:
           MEILI_URL: http://127.0.0.1:7700
           TOOLHUB_PORT: "7600"

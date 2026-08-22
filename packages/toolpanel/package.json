@@ -19,7 +19,7 @@
   "homepage": "https://toolrator.com",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/toolrator/toolrator.git",
+    "url": "git+https://github.com/toolrator/Toolrator.git",
     "directory": "packages/toolpanel"
   },
   "publishConfig": {

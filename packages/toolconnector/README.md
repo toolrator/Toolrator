@@ -66,8 +66,8 @@ The `toolconnector` exposes exactly **4 client-facing tools** to your AI agent:
 ### 1. `search_mcp_ecosystem`
 * **Purpose**: Search the configured search ecosystem (and any custom search engines) for tools, resources, or prompts.
 * **Parameters**:
-  * `engine` (enum, required): Which configured search engine to query (see [Pluggable Search Engines](#-pluggable-search-engines)). Defaults to the implicit `${CONNECTOR_PRODUCT_NAME}-default` engine (default id `toolconnector-default`) when no custom engines are set.
-  * `arguments` (record, required): Engine-specific search arguments, validated against that engine's schema (`schemaUrl`).
+  * `engine` (enum, required): Which configured search engine to query (see [Pluggable Search Engines](#-pluggable-search-engines)). When no custom engines are set, the implicit `${CONNECTOR_PRODUCT_NAME}-default` engine (default id `toolconnector-default`) is pre-registered and must be selected explicitly; if no engines exist at all, the enum is `["none"]`.
+  * `arguments` (record, required): Engine-specific search arguments, passed through to the engine as-is. The engine's schema (`schemaUrl`) is fetched and surfaced in the tool description to guide argument construction, but arguments are not validated at runtime.
 * **Returns**: Search results in the shape defined by the selected engine's schema.
 
 ### 2. `mcp_server`
@@ -86,7 +86,7 @@ The `toolconnector` exposes exactly **4 client-facing tools** to your AI agent:
 ### 3. `manage_auth`
 * **Purpose**: Manage passwordless device-flow authentication and check account status.
 * **Parameters**: 
-  * `action` (`"status" | "start_device_flow" | "poll_device_flow" | "logout"`, required): The auth action to perform. Dynamically scoped by state: `"status"` and `"logout"` when authenticated; `"status"`, `"start_device_flow"`, and `"poll_device_flow"` when anonymous.
+  * `action` (`"status" | "start_device_flow" | "poll_device_flow" | "logout"`, required): The auth action to perform. Dynamically scoped by state: `"status"` and `"logout"` when authenticated; `"status"`, `"start_device_flow"`, and `"poll_device_flow"` when anonymous (or while a device flow is pending).
   * `device_code` (string, optional): Required for manual polling.
 * **Returns**: Login state, verification URL and user code, or confirmation status.
 
@@ -126,6 +126,8 @@ sequenceDiagram
 ```
 
 ---
+
+The connector also uses `POST /api/auth/verify-key` (with retry/backoff) to validate stored API keys and `GET /api/connector/config/auto` to fetch the authoritative search-engine list — self-hosted upstreams must implement both. A stored API key that keeps failing verification (401 on all retries) logs the user out and clears stored credentials.
 
 ## ⚠️ Structured Error Architecture
 
@@ -171,15 +173,15 @@ Available environment variables:
 - `CONNECTOR_UPSTREAM_URL`: Base URL for authentication endpoints (default: `https://toolrator.com`). Used as the neutral fallback so non-technical / remotely-hosted users without toolpanel still get the `auto` flow; override to point at your own upstream.
 - `CONNECTOR_DEFAULT_UPSTREAM_URL`: Default base URL fallback when `CONNECTOR_UPSTREAM_URL` is unset (default: `https://toolrator.com`).
 - `CONNECTOR_PRODUCT_NAME`: Product name driving product-derived identifiers — the config-dir subfolder, the implicit-default search-engine id (`<productName>-default`), and any user-facing string that mentions the product. The auth-management tool name itself (`manage_auth`) is fixed and NOT interpolated. Default: `toolconnector`.
-- `TOOLPANEL_URL`: Base URL of a self-hostable **toolpanel** instance (default: `http://127.0.0.1:7800`). When set and active, the connector prefers toolpanel over `CONNECTOR_UPSTREAM_URL` for the authoritative search-engine config. See [`toolpanel`](../../toolpanel).
-- `TOOLPANEL_DISCOVERY`: `auto` (default) or `off`. When `auto`, the connector probes `TOOLPANEL_URL` at boot (and on each re-resolve) to decide if toolpanel is alive before preferring it. When `off`, the probe is skipped entirely — useful when toolpanel is on a different host and you've already pinned `CONNECTOR_SEARCH_CONFIG_MODE=toolpanel`.
+- `TOOLPANEL_URL`: Base URL of a self-hostable **toolpanel** instance (default: `http://127.0.0.1:7800`). When set and active, the connector prefers toolpanel over `CONNECTOR_UPSTREAM_URL` for the authoritative search-engine config. See [`toolpanel`](../toolpanel).
+- `TOOLPANEL_DISCOVERY`: `auto` (default) or `off`. When `auto`, the connector probes `TOOLPANEL_URL` at boot (and on each re-resolve) to decide if toolpanel is alive before preferring it. When `off`, the probe is skipped in `auto` mode — the connector goes straight to `CONNECTOR_UPSTREAM_URL`. Note: with `CONNECTOR_SEARCH_CONFIG_MODE=toolpanel`, the liveness probe always runs regardless of this setting.
 - `TOOLPANEL_PROBE_PATH`: Path appended to `TOOLPANEL_URL` for the liveness probe (default: `/.well-known/toolpanel-alive`).
 - `TOOLPANEL_PROBE_TIMEOUT_MS`: Probe timeout in milliseconds (default: `1500`).
 - `CONNECTOR_LOG_LEVEL`: Log level: `debug`, `info`, `warn`, or `error` (default: `info`).
 - `CONNECTOR_SEARCH_CONFIG`: Absolute path to a custom search-engines JSON file. Overrides the config-dir file (see [Pluggable Search Engines](#-pluggable-search-engines)).
 - `CONNECTOR_SEARCH_CONFIG_MODE`: `auto` (default), `toolpanel`, or `file`. Controls how search engines are resolved.
   - `auto` — authenticated: prefer toolpanel (when `TOOLPANEL_URL` is set and reachable), fall back to `CONNECTOR_UPSTREAM_URL`, then to the local file. Unauthenticated: local file → implicit-default engine.
-  - `toolpanel` — authenticated: only use toolpanel (`TOOLPANEL_URL` must be set). If toolpanel is unreachable, fall back to `CONNECTOR_UPSTREAM_URL`. Never hit `CONNECTOR_UPSTREAM_URL` first.
+  - `toolpanel` — authenticated: only use toolpanel (`TOOLPANEL_URL` must be set and reachable). If toolpanel is unreachable, fall back to the local `search-engines.json` file; `CONNECTOR_UPSTREAM_URL` is never contacted.
   - `file` — always use the local `search-engines.json` (or `CONNECTOR_SEARCH_CONFIG`) and never pull from any server.
 - `TOOLCONNECTOR_VERSION`: Connector version reported to MCP clients (default: derived from `package.json`).
 
@@ -208,7 +210,7 @@ Local state is stored in `CONNECTOR_CONFIG_DIR`, or the following OS default (wh
 - **macOS**: `~/Library/Application Support/<productName>`
 - **Linux**: `$XDG_CONFIG_HOME/<productName>` (falls back to `~/.config/<productName>`)
 
-This directory holds `credentials.json`, `favorites.json`, and `search-engines.json`.
+This directory holds `credentials.json`, `favorites.json`, `search-engines.json`, and a `schemas/` subdirectory (a per-engine cache of schemas fetched from each engine's `schemaUrl`).
 
 ---
 
@@ -229,7 +231,7 @@ A ready-to-copy template is provided in [`search-engines.example.json`](./search
 ### Resolution mode (`CONNECTOR_SEARCH_CONFIG_MODE`)
 
 - **`auto`** (default): When authenticated, the connector pulls the authoritative engine list **preferentially from your toolpanel instance** (if `TOOLPANEL_URL` is set and reachable), otherwise from your configured upstream (`CONNECTOR_UPSTREAM_URL`), and **overwrites the local `search-engines.json`** as a cache. Your local edits are only used when unauthenticated, toolpanel is unreachable, and `CONNECTOR_UPSTREAM_URL` is unreachable or returns a non-200. Manage engines from your toolpanel or upstream account UI.
-- **`toolpanel`**: The connector only uses `${TOOLPANEL_URL}/api/connector/config/auto` as the authoritative source when authenticated. If toolpanel is unreachable, it falls back to `CONNECTOR_UPSTREAM_URL`. It never reads `CONNECTOR_UPSTREAM_URL` first. Use this to guarantee a self-hosted control panel is the source of truth whenever it's online.
+- **`toolpanel`**: The connector only uses `${TOOLPANEL_URL}/api/connector/config/auto` as the authoritative source when authenticated. If toolpanel is unreachable, it falls back to the local `search-engines.json` file and never contacts `CONNECTOR_UPSTREAM_URL`. Use this to guarantee a self-hosted control panel is the source of truth whenever it's online.
 - **`file`**: The connector always uses the local `search-engines.json` (or `CONNECTOR_SEARCH_CONFIG`) and never pulls from any server. Use this if you want your local file edits to be authoritative.
 
 ### Engine schema
@@ -256,11 +258,13 @@ Each entry is validated against the following structure. Unknown fields are igno
 | `transport` | yes | `"http"`, `"mcp-http"`, `"mcp-sse"`, or `"mcp-stdio"`. |
 | `endpoint` | yes | Endpoint URL, or the command to run for `mcp-stdio`. |
 | `args` | for `mcp-stdio` | Command arguments array. Required when `transport` is `"mcp-stdio"`. |
-| `schemaUrl` | no | URL to the engine's argument schema (used to validate `search_mcp_ecosystem` arguments). |
+| `schemaUrl` | no | URL to the engine's argument schema (fetched and surfaced in the `search_mcp_ecosystem` tool description; arguments are passed through unvalidated). |
 | `auth` | no | `{ "type": "bearer" \| "basic" \| "header", "tokenEnv": "ENV_VAR", "headerName": "X-..." }`. `headerName` is required when `type` is `"header"`. |
 | `notes` | no | Free-text note, max 500 chars. |
 | `timeoutMs` | no | Request timeout in ms (default `10000`). |
 | `enabled` | no | Set `false` to keep the config but skip registering the engine (default `true`). |
+
+> **HTTP behavior**: The implicit default engine (and any engine with id `toolhub-default`) is queried via legacy `GET /api/search?q=&limit=&offset=`; custom `http` engines are queried via `POST` to `endpoint` with the JSON arguments as body. `mcp-http` / `mcp-sse` engines call the `search` tool on the remote MCP server; `mcp-stdio` spawns `endpoint` with `args`.
 
 > **Credentials**: never put secrets in the JSON. Use `auth.tokenEnv` to reference an environment variable; the connector reads the token from the environment at runtime and warns if it is missing.
 
@@ -331,13 +335,13 @@ A: Add an entry to `search-engines.json` (see [Pluggable Search Engines](#-plugg
 
 ## 🤝 Contributing
 
-This package is part of the [Toolrator OSS ecosystem](https://github.com/toolrator/toolrator).
+This package is part of the [Toolrator OSS ecosystem](https://github.com/toolrator/Toolrator).
 
 - Run tests: `npm test`
 - Typecheck: `npm run typecheck`
 - Test runner: Node.js built-in `node --test` (no Jest/Vitest)
 
-See [`CONTRIBUTING.md`](https://github.com/toolrator/toolrator/blob/main/CONTRIBUTING.md) and [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md).
+See [`CONTRIBUTING.md`](https://github.com/toolrator/Toolrator/blob/main/CONTRIBUTING.md) and [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md).
 
 ---
 

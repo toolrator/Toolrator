@@ -6,7 +6,7 @@
 //
 // `current` = what the running config wants; `active` = what the indexes
 // were actually built with. When they differ, a full reindex is required —
-// the enterprise orchestrator reads this from /health and triggers it
+// an external orchestrator can read this from /health and trigger it
 // (TOOLHUB_AUTO_REINDEX_ENABLED, see plan D5).
 // ---------------------------------------------------------------------------
 
