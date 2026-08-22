@@ -82,7 +82,7 @@ jobs:
       PERF_QUICK: ${{ needs.resolve.outputs.quick }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -151,7 +151,7 @@ jobs:
           MEILI_HTTP_ADDR: "0.0.0.0:7702"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -208,7 +208,7 @@ jobs:
           MEILI_HTTP_ADDR: "0.0.0.0:7702"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -259,7 +259,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
