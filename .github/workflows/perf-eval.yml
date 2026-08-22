@@ -100,7 +100,7 @@ jobs:
         run: npm run build
 
       - name: Cache Embedding Model
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           # @xenova/transformers v2 caches models inside its own package dir.
           # The cache step must run AFTER npm ci (which wipes node_modules)
@@ -169,7 +169,7 @@ jobs:
         run: npm run build
 
       - name: Cache Embedding Model
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: packages/toolhub/node_modules/@xenova/transformers/.cache
           key: toolhub-e5-model-${{ runner.os }}-${{ hashFiles('packages/toolhub/package-lock.json') }}
@@ -226,7 +226,7 @@ jobs:
         run: npm run build
 
       - name: Cache Embedding Model
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: packages/toolhub/node_modules/@xenova/transformers/.cache
           key: toolhub-e5-model-${{ runner.os }}-${{ hashFiles('packages/toolhub/package-lock.json') }}
