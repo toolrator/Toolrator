@@ -2,12 +2,12 @@ name: Toolpanel CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, dev ]
     paths:
       - 'packages/toolpanel/**'
       - '.github/workflows/toolpanel-ci.yml'
   pull_request:
-    branches: [ main, master ]
+    branches: [ main, master, dev ]
     paths:
       - 'packages/toolpanel/**'
 

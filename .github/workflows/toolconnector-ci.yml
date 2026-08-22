@@ -2,12 +2,12 @@ name: Toolconnector CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, dev ]
     paths:
       - 'packages/toolconnector/**'
       - '.github/workflows/toolconnector-ci.yml'
   pull_request:
-    branches: [ main, master ]
+    branches: [ main, master, dev ]
     paths:
       - 'packages/toolconnector/**'
 

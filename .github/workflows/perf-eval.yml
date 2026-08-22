@@ -2,12 +2,12 @@ name: Toolhub Perf Eval
 
 on:
   pull_request:
-    branches: [ main, master ]
+    branches: [ main, master, dev ]
     paths:
       - 'packages/toolhub/**'
       - '.github/workflows/perf-eval.yml'
   push:
-    branches: [ main, master ]
+    branches: [ main, master, dev ]
     paths:
       - 'packages/toolhub/**'
       - '.github/workflows/perf-eval.yml'
@@ -120,6 +120,7 @@ jobs:
           MEILI_URL: http://meilisearch:7702
           TOOLHUB_PORT: "7601"
           SEARCH_ADMIN_TOKEN: dev-admin-token
+          TOOLHUB_EMBEDDING_PROVIDER: local
 
       - name: Upload Perf Report
         if: always()
@@ -181,6 +182,7 @@ jobs:
           MEILI_URL: http://meilisearch:7702
           TOOLHUB_PORT: "7601"
           SEARCH_ADMIN_TOKEN: dev-admin-token
+          TOOLHUB_EMBEDDING_PROVIDER: local
 
       - name: Upload Baseline (1c2g)
         continue-on-error: true
@@ -238,6 +240,7 @@ jobs:
           MEILI_URL: http://meilisearch:7702
           TOOLHUB_PORT: "7601"
           SEARCH_ADMIN_TOKEN: dev-admin-token
+          TOOLHUB_EMBEDDING_PROVIDER: local
 
       - name: Upload Baseline (2c4g)
         continue-on-error: true

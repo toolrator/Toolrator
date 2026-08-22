@@ -2,12 +2,12 @@ name: Toolhub CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, dev ]
     paths:
       - 'packages/toolhub/**'
       - '.github/workflows/toolhub-ci.yml'
   pull_request:
-    branches: [ main, master ]
+    branches: [ main, master, dev ]
     paths:
       - 'packages/toolhub/**'
 

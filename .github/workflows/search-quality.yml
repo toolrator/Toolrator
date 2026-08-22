@@ -2,9 +2,9 @@ name: Search Quality Eval
 
 on:
   pull_request:
-    branches: [ main, master ]
+    branches: [ main, master, dev ]
   push:
-    branches: [ main, master ]
+    branches: [ main, master, dev ]
   workflow_dispatch:
 
 permissions:
@@ -85,6 +85,7 @@ jobs:
           MEILI_URL: http://127.0.0.1:7700
           TOOLHUB_PORT: "7600"
           SEARCH_ADMIN_TOKEN: dev-admin-token
+          TOOLHUB_EMBEDDING_PROVIDER: local
 
       - name: Upload Eval Report
         if: always() && steps.changes.outputs.relevant == 'true'
@@ -151,6 +152,7 @@ jobs:
           MEILI_URL: http://127.0.0.1:7700
           TOOLHUB_PORT: "7600"
           SEARCH_ADMIN_TOKEN: dev-admin-token
+          TOOLHUB_EMBEDDING_PROVIDER: local
 
       - name: Commit Updated Baseline
         run: |
