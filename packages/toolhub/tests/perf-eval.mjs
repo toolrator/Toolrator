@@ -100,6 +100,11 @@ function percentile(arr, p) {
 function pStats(arr) {
   if (arr.length === 0) return { samples: 0, avg: 0, p50: 0, p90: 0, p95: 0, p99: 0, max: 0 };
   const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+  // NOTE: no Math.max(...arr) spread here — soak runs collect >100k samples and
+  // spreading them as arguments overflows the call stack ("Maximum call stack
+  // size exceeded" on faster hosts).
+  let max = -Infinity;
+  for (const v of arr) if (v > max) max = v;
   return {
     samples: arr.length,
     avg: round(avg),
@@ -107,7 +112,7 @@ function pStats(arr) {
     p90: round(percentile(arr, 90)),
     p95: round(percentile(arr, 95)),
     p99: round(percentile(arr, 99)),
-    max: round(Math.max(...arr)),
+    max: round(max),
   };
 }
 
@@ -556,7 +561,7 @@ async function main() {
       fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary + "\n");
     }
   } catch (err) {
-    console.error(`[perf] FAILED: ${err.message}`);
+    console.error(`[perf] FAILED: ${err.stack || err.message}`);
     failed = true;
   } finally {
     child.kill();
