@@ -126,7 +126,7 @@ jobs:
         # continue-on-error: act has no artifact service, so the eval result
         # (the real signal) must not be hidden by an upload failure.
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: search-perf-report-${{ matrix.config }}
           path: packages/toolhub/search-perf-report.json
@@ -184,7 +184,7 @@ jobs:
 
       - name: Upload Baseline (1c2g)
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: search-perf-baseline-1c2g
           path: packages/toolhub/tests/fixtures/perf-baseline.json
@@ -241,7 +241,7 @@ jobs:
 
       - name: Upload Baseline (2c4g)
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: search-perf-baseline-2c4g
           path: packages/toolhub/tests/fixtures/perf-baseline.json
