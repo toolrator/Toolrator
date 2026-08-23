@@ -12,3 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - `@toolrator/toolconnector` — local stdio MCP bridge connecting AI agents to search backends and external MCP servers.
   - `@toolrator/toolpanel` — self-hosted control panel (auth device flow, search-engine config, admin UI).
   - `@toolrator/toolhub` — typo-tolerant + hybrid vector search engine (MeiliSearch or in-memory backend).
+
+### Fixed
+
+- Toolhub: `eval:perf --compare` failures now print the full stack trace instead of only the error message.

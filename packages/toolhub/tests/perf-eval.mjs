@@ -377,7 +377,7 @@ async function main() {
     try {
       process.exit(runCompare(args));
     } catch (err) {
-      console.error(`[perf] FAILED: ${err.message}`);
+      console.error(`[perf] FAILED: ${err.stack || err.message}`);
       process.exit(1);
     }
   }
