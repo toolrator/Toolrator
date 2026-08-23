@@ -225,3 +225,7 @@ function readLogLevel(
   }
   return fallback;
 }
+
+// ── CI DEMO: intentional type error — this PR must FAIL, do not merge ──
+const CI_DEMO_BUG: number = "this string is definitely not a number";
+
