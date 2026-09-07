@@ -1,12 +1,12 @@
 {
-  "updatedAt": "2026-08-20T17:29:32.688Z",
+  "updatedAt": "2026-09-07T12:23:36.516Z",
   "local": {
     "weighted": 78,
     "precisionAt1": 0.6875,
     "precisionAt3": 0.875,
     "queries": 32,
-    "toolWeighted": 85,
-    "toolPrecisionAt1": 0.75,
+    "toolWeighted": 89,
+    "toolPrecisionAt1": 0.8125,
     "toolPrecisionAt3": 0.9375,
     "toolQueries": 16,
     "intentAccuracy": 63,
