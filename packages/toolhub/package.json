@@ -1,0 +1,65 @@
+{
+  "name": "@toolrator/toolhub",
+  "version": "0.1.0",
+  "private": true,
+  "author": "Toolrator <contact@toolrator.org>",
+  "license": "Apache-2.0",
+  "homepage": "https://toolrator.org",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/toolrator/Toolrator.git",
+    "directory": "packages/toolhub"
+  },
+  "description": "MCP Server search engine with pluggable adapters. Designed for fast, typo-tolerant, faceted discovery of MCP servers.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "search-engine",
+    "meilisearch",
+    "vector-search",
+    "embeddings",
+    "discovery",
+    "typescript"
+  ],
+  "type": "module",
+  "main": "dist/server.js",
+  "files": [
+    "dist",
+    "Dockerfile",
+    "README.md",
+    "LICENSE",
+    ".env.example"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dev": "node --env-file-if-exists=.env --import tsx src/server.ts",
+    "prestart": "npm run build",
+    "start": "node --env-file-if-exists=.env dist/server.js",
+    "test": "node --import tsx --test tests/**/*.test.ts",
+    "eval:search": "node --env-file-if-exists=.env tests/search-eval.mjs",
+    "eval:search:update": "node --env-file-if-exists=.env tests/search-eval.mjs --update-baseline",
+    "eval:search:real": "node --env-file-if-exists=.env tests/search-eval.mjs --catalog real",
+    "eval:search:real:update": "node --env-file-if-exists=.env tests/search-eval.mjs --catalog real --update-baseline",
+    "eval:perf": "node tests/perf-eval.mjs --config host",
+    "eval:perf:constrained": "node tests/perf-eval.mjs --config 2c4g",
+    "eval:perf:quick": "node tests/perf-eval.mjs --config 1c2g --quick",
+    "eval:perf:update": "node tests/perf-eval.mjs --config 2c4g --update-baseline"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.8",
+    "@xenova/transformers": "^2.17.2",
+    "hono": "^4.6.11",
+    "lru-cache": "^11.5.2",
+    "meilisearch": "^0.48.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

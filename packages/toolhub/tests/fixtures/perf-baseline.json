@@ -1,0 +1,39 @@
+{
+  "updatedAt": "2026-08-17T11:18:45.255Z",
+  "1c2g": {
+    "provider": "local",
+    "model": "Xenova/multilingual-e5-small",
+    "bootMaxMs": 30000,
+    "coldQueryMaxMs": 30000,
+    "seedMaxMs": 60000,
+    "p95MaxMs": 1000,
+    "p99MaxMs": 3000,
+    "throughputRpsFloor": {
+      "5": 289,
+      "10": 354,
+      "20": 356
+    },
+    "soakRpsFloor": 343,
+    "errorRateMax": 0.005,
+    "rssGrowthMaxPct": 0.2,
+    "rssPeakMaxMb": 1900
+  },
+  "2c4g": {
+    "provider": "local",
+    "model": "Xenova/multilingual-e5-small",
+    "bootMaxMs": 30000,
+    "coldQueryMaxMs": 30000,
+    "seedMaxMs": 60000,
+    "p95MaxMs": 1000,
+    "p99MaxMs": 3000,
+    "throughputRpsFloor": {
+      "5": 517,
+      "10": 755,
+      "20": 676
+    },
+    "soakRpsFloor": 625,
+    "errorRateMax": 0.005,
+    "rssGrowthMaxPct": 0.2,
+    "rssPeakMaxMb": 3900
+  }
+}

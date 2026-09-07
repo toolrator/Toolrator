@@ -1,0 +1,42 @@
+{
+  "updatedAt": "2026-08-19T18:36:35.005Z",
+  "openai-compatible/@cf/baai/bge-small-en-v1.5": {
+    "weighted": 39,
+    "precisionAt1": 0.3438,
+    "precisionAt3": 0.4375,
+    "queries": 32,
+    "toolWeighted": 38,
+    "toolPrecisionAt1": 0.3,
+    "toolPrecisionAt3": 0.45,
+    "toolQueries": 20,
+    "intentAccuracy": 63,
+    "toolEvidenceRate": 100,
+    "falseToolRate": 22
+  },
+  "openai-compatible/@cf/qwen/qwen3-embedding-0.6b": {
+    "weighted": 37,
+    "precisionAt1": 0.3438,
+    "precisionAt3": 0.4063,
+    "queries": 32,
+    "toolWeighted": 39,
+    "toolPrecisionAt1": 0.3,
+    "toolPrecisionAt3": 0.5,
+    "toolQueries": 20,
+    "intentAccuracy": 62,
+    "toolEvidenceRate": 100,
+    "falseToolRate": 28
+  },
+  "openai-compatible/nvidia/nemotron-3-embed-1b:free": {
+    "weighted": 41,
+    "precisionAt1": 0.375,
+    "precisionAt3": 0.4375,
+    "queries": 32,
+    "toolWeighted": 53,
+    "toolPrecisionAt1": 0.45,
+    "toolPrecisionAt3": 0.65,
+    "toolQueries": 20,
+    "intentAccuracy": 54,
+    "toolEvidenceRate": 100,
+    "falseToolRate": 31
+  }
+}

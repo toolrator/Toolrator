@@ -1,0 +1,15 @@
+# Dependency-update automation is intentionally disabled during the pre-release
+# development phase. Re-enable per-package entries (open-pull-requests-limit: 5)
+# when the first stable release ships.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 0
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 0

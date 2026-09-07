@@ -1,0 +1,169 @@
+name: Search Quality Eval
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: search-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  search-quality-eval:
+    name: Search Quality Eval
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    services:
+      meilisearch:
+        image: getmeili/meilisearch:v1.11
+        ports:
+          - 7700:7700
+        env:
+          MEILI_NO_ANALYTICS: "true"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: packages/toolhub/package-lock.json
+
+      - name: Check relevant changes
+        id: changes
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            CHANGED=$(git diff --name-only "${{ github.event.pull_request.base.sha }}...HEAD" -- packages/toolhub .github/workflows/search-quality.yml)
+          else
+            CHANGED="always"
+          fi
+          if [ -z "$CHANGED" ]; then
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "No changes to packages/toolhub or the workflow — eval will be skipped."
+          else
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "Relevant changes detected — running eval."
+          fi
+
+      - name: Install Dependencies
+        if: steps.changes.outputs.relevant == 'true'
+        working-directory: packages/toolhub
+        run: npm ci
+
+      - name: Build Code
+        if: steps.changes.outputs.relevant == 'true'
+        working-directory: packages/toolhub
+        run: npm run build
+
+      - name: Cache Embedding Model
+        if: steps.changes.outputs.relevant == 'true'
+        uses: actions/cache@v4
+        with:
+          # @xenova/transformers v2 caches models inside its own package dir.
+          # The cache step must run AFTER npm ci (which wipes node_modules)
+          # and restore the model into the freshly installed tree.
+          path: packages/toolhub/node_modules/@xenova/transformers/.cache
+          key: toolhub-e5-model-${{ runner.os }}-${{ hashFiles('packages/toolhub/package-lock.json') }}
+
+      - name: Run Search Quality Eval
+        if: steps.changes.outputs.relevant == 'true'
+        working-directory: packages/toolhub
+        run: npm run eval:search
+        env:
+          MEILI_URL: http://127.0.0.1:7700
+          TOOLHUB_PORT: "7600"
+          SEARCH_ADMIN_TOKEN: dev-admin-token
+          TOOLHUB_EMBEDDING_PROVIDER: local
+          TOOLHUB_EMBEDDING_BATCH_SIZE: "32"
+
+      - name: Upload Eval Report
+        if: always() && steps.changes.outputs.relevant == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: search-eval-report
+          path: packages/toolhub/search-eval-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: No relevant changes
+        if: steps.changes.outputs.relevant == 'false'
+        run: echo "Eval skipped — no relevant changes."
+
+  update-baseline:
+    name: Refresh Baseline on Main
+    needs: search-quality-eval
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+
+    services:
+      meilisearch:
+        image: getmeili/meilisearch:v1.11
+        ports:
+          - 7700:7700
+        env:
+          MEILI_NO_ANALYTICS: "true"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: packages/toolhub/package-lock.json
+
+      - name: Install Dependencies
+        working-directory: packages/toolhub
+        run: npm ci
+
+      - name: Build Code
+        working-directory: packages/toolhub
+        run: npm run build
+
+      - name: Cache Embedding Model
+        uses: actions/cache@v4
+        with:
+          # @xenova/transformers v2 caches models inside its own package dir.
+          # The cache step must run AFTER npm ci (which wipes node_modules)
+          # and restore the model into the freshly installed tree.
+          path: packages/toolhub/node_modules/@xenova/transformers/.cache
+          key: toolhub-e5-model-${{ runner.os }}-${{ hashFiles('packages/toolhub/package-lock.json') }}
+
+      - name: Run Search Quality Eval (update baseline)
+        working-directory: packages/toolhub
+        run: npm run eval:search:update
+        env:
+          MEILI_URL: http://127.0.0.1:7700
+          TOOLHUB_PORT: "7600"
+          SEARCH_ADMIN_TOKEN: dev-admin-token
+          TOOLHUB_EMBEDDING_PROVIDER: local
+          TOOLHUB_EMBEDDING_BATCH_SIZE: "32"
+
+      - name: Commit Updated Baseline
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packages/toolhub/tests/fixtures/search-eval-baseline.json
+          if git diff --cached --quiet; then
+            echo "Baseline unchanged — nothing to commit."
+          else
+            git commit -m "chore(toolhub): update search eval baseline"
+            git push
+          fi

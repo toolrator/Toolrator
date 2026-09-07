@@ -1,0 +1,14 @@
+{
+  "name": "toolrator",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Toolrator Open Source Ecosystem (toolconnector, toolhub, toolpanel)",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  }
+}

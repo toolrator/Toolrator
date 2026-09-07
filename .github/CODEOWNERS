@@ -1,0 +1,4 @@
+# Baseline and calibration data: human changes require code-owner review.
+# The automated refresh jobs (github-actions[bot]) are exempted via the
+# branch protection bypass list so auto-updates keep landing on main.
+packages/toolhub/tests/fixtures/*.json @toolrator

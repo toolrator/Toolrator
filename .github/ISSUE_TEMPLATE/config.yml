@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Toolrator Discussions
+    url: https://github.com/toolrator/Toolrator/discussions
+    about: Questions, ideas, and general discussion go here.
+  - name: Security Policy
+    url: https://github.com/toolrator/Toolrator/security/policy
+    about: Please report security vulnerabilities here — not as public issues.
