@@ -158,7 +158,6 @@ This repository publishes the open-source client and discovery infrastructure fo
 
 ### 🔍 `@toolrator/toolhub`
 
-[![npm](https://img.shields.io/npm/v/@toolrator/toolhub?style=flat-square&logo=npm)](https://www.npmjs.com/package/@toolrator/toolhub)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
 
 **High-performance search engine** with typo tolerance, faceted filtering, and hybrid vector search.
