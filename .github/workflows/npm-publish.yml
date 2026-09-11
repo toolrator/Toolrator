@@ -13,6 +13,14 @@ name: Publish to NPM Registry
 # Releases are maintainer-only: merging PRs into `main` never publishes.
 # The easiest way to tag is GitHub's Releases page ("Draft a new release"),
 # which creates the tag and fires this workflow in one click.
+#
+# Auth mode (OIDC-first, token fallback):
+#   - Runners use Node 24 (npm >= 11.5.1), so the CLI automatically uses OIDC
+#     (Trusted Publishing) when the package has a Trusted Publisher configured
+#     on npmjs.com, and only falls back to NPM_TOKEN otherwise.
+#   - Both packages now have Trusted Publishers configured. After the first
+#     green OIDC publish for each, remove the NODE_AUTH_TOKEN env lines below,
+#     delete the NPM_TOKEN secret, and revoke the npm token.
 
 on:
   push:
@@ -40,7 +48,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           registry-url: 'https://registry.npmjs.org'
 
       - name: Verify tag matches package.json version
@@ -71,6 +79,8 @@ jobs:
 
       - name: Publish to NPM
         working-directory: packages/toolconnector
+        # OIDC (Trusted Publishing) is preferred by npm >= 11.5.1; the token
+        # below is only a fallback until OIDC is validated for this package.
         run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -86,7 +96,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           registry-url: 'https://registry.npmjs.org'
 
       - name: Verify tag matches package.json version
@@ -117,6 +127,8 @@ jobs:
 
       - name: Publish to NPM
         working-directory: packages/toolpanel
+        # OIDC (Trusted Publishing) is preferred by npm >= 11.5.1; the token
+        # below is only a fallback until OIDC is validated for this package.
         run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
