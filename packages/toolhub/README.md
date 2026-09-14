@@ -215,7 +215,7 @@ All settings are via environment variables:
 Semantic search needs dense vectors. Toolhub gets them from a **pluggable embedding provider** selected at boot via `TOOLHUB_EMBEDDING_PROVIDER`. Every provider (and every model) declares two capabilities that drive the whole system:
 
 - **`dimensions`** — vector dimensionality; MeiliSearch's vector settings are configured from it automatically.
-- **`maxInputChars`** — max input length in characters; documents are **truncated** to this before embedding (with a `…` marker), so a small-window model can never be fed oversized text.
+- **`maxInputChars`** — max input length in characters per embedding request; longer documents are split into chunks that fit (never cut mid-grapheme) and their vectors are length-weighted mean-pooled, so nothing is dropped and a small-window model is never fed oversized text.
 
 There is exactly one abstraction (`src/embedder.ts`, `EmbeddingProvider` interface), so switching providers or models is purely configuration — no code changes.
 
@@ -328,7 +328,7 @@ Every model embeds into its **own vector space** — vectors from different mode
 | `[embedder] TOOLHUB_EMBEDDING_PROVIDER=... requires TOOLHUB_EMBEDDING_BATCH_SIZE ...` | Batch size has no default by design — set `TOOLHUB_EMBEDDING_BATCH_SIZE` explicitly (e.g. `32`) whenever a provider is enabled |
 | `[embedder] TOOLHUB_EMBEDDING_PROVIDER=openai-compatible requires ...` | Missing `TOOLHUB_EMBEDDING_BASE_URL` / `TOOLHUB_EMBEDDING_API_KEY` |
 | HTTP 401 / 403 from the API | Key wrong, lacks permissions, or the base URL points at the wrong account |
-| HTTP 429 | Host rate/quota limit exceeded — retried once automatically, then this query falls back to lexical |
+| HTTP 429 | Host rate/quota limit exceeded — retried with backoff (default 3 attempts, `TOOLHUB_EMBEDDING_RETRIES`), honoring `Retry-After`; then this query falls back to lexical |
 | `Unexpected OpenAI-compatible embeddings response shape` | API schema changed — update `extractVector` in `src/embedder.ts` (tolerates the standard `data[0].embedding` + a nested `data[0].data`) |
 | API rejects `input_type` | Model is symmetric (e.g. OpenAI `text-embedding-3-*`) — unset `TOOLHUB_EMBEDDING_INPUT_TYPE_*`; or the values are wrong for the model (e.g. nemotron wants `passage`/`query`, not `search_document`/`search_query`) |
 | `_vectors` / settings task failure during reindex | Dimension change — automatic wipe-and-retry handles it; if the log shows repeated failures, verify `TOOLHUB_*_EMBEDDING_DIMENSIONS` matches the model |

@@ -38,7 +38,7 @@ The **Toolconnector** is a lightweight, local **stdio Model Context Protocol (MC
 
 `toolconnector` acts as the **universal adapter**. By installing `toolconnector` locally, your local AI agent gains instant, secure, and authenticated access to any configured search-engine backend (via toolpanel or a compatible upstream) and external MCP servers.
 
-Since v0.1.0, the tool interface has been simplified to exactly **4 unified, powerful tools** to optimize the context window for LLMs.
+Since v0.1.0, the tool interface is exactly **4 tools**, so the agent's context window carries four tool definitions instead of dozens.
 
 ---
 
@@ -159,12 +159,7 @@ Since `toolconnector` is a standard stdio MCP server, it can be added to any com
 
 ### ⚙️ Environment Configuration
 
-You can configure `toolconnector` via environment variables. Create a `.env` file in the package root or configure the variables globally on your system. A `.env.example` file is provided for reference:
-
-```bash
-# Copy the example config
-cp .env.example .env
-```
+You can configure `toolconnector` via plain environment variables. There is no `.env` loader — set the variables in your MCP client config (most clients support an `env` block per server, e.g. the `env` object next to `command`/`args` in Claude Desktop's `mcpServers` entry) or export them in the shell that launches the connector. `.env.example` documents every knob as a reference.
 
 Available environment variables:
 

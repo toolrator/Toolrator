@@ -9,17 +9,17 @@ Thank you for considering contributing! This document covers the workflow for th
 git clone https://github.com/toolrator/Toolrator.git
 cd Toolrator
 
-# 2. Install dependencies — EITHER once at the root (npm workspaces):
-npm install
-# ...or per package, if you prefer isolated installs:
-# cd packages/toolconnector && npm install
-# cd ../toolhub && npm install
-# cd ../toolpanel && npm install
+# 2. Install dependencies — per package (this is what CI runs):
+cd packages/toolconnector && npm install
+cd ../toolhub && npm install
+cd ../toolpanel && npm install
 
-# 3. Run tests
-npm test            # runs every package's test suite via workspaces
-# or a single package:
+# 3. Run tests, per package
 cd packages/toolconnector && npm test
+
+# The repo root also carries a convenience package.json with
+# `npm run test --workspaces --if-present`; it exists for local ergonomics
+# but is not exercised by CI, so treat per-package commands as canonical.
 ```
 
 ## Development Conventions

@@ -36,7 +36,7 @@
 
 <!-- ==================== QUOTE ==================== -->
 
-> **The local-first discovery layer for the AI agent era.**  
+> **The local-first discovery layer for AI agents.**  
 > `@toolrator/toolconnector` bridges any MCP-compatible AI client to search backends and external servers — all without leaving your machine.
 
 <br/>
@@ -64,8 +64,8 @@
 
 | | |
 |---|---|
-| **🧠 MCP 2026-07-28 (official)** | First-mover on the stateless protocol — SEP-2575, MRTR, Tasks extension, Streamable HTTP |
-| **🔌 Zero-Config Setup** | `npx -y @toolrator/toolconnector` — one command, four unified tools, instant discovery |
+| **🧠 MCP 2026-07-28 (official)** | Built on the stateless protocol revision — SEP-2575, MRTR, Tasks extension, Streamable HTTP |
+| **🔌 Zero-Config Setup** | `npx -y @toolrator/toolconnector` — one command, four tools, instant discovery |
 | **🔍 Typo-Tolerant Search** | MeiliSearch + ONNX hybrid vector search for finding MCP servers and tools |
 | **🏠 Self-Hostable** | Toolpanel + Toolhub run fully offline — no cloud dependency |
 | **📋 4-Tool Surface** | Minimal context window footprint: search, inspect/execute, auth, bookmarks |
@@ -276,7 +276,7 @@ Add to your MCP client config:
 
 <br/>
 
-The Toolrator OSS stack is built against **MCP 2026-07-28** — the official stable revision of the Model Context Protocol (released 2026-07-28). Every applicable feature is implemented and tested.
+The Toolrator OSS stack is built against **MCP 2026-07-28** — the official stable revision of the Model Context Protocol (released 2026-07-28). The matrix below tracks what is implemented and tested; deferred and not-applicable rows are marked as such.
 
 <br/>
 
@@ -455,5 +455,5 @@ We welcome contributions from **humans and AI agents** alike.
 
   <br/><br/>
 
-  <sub>Built for the AI Agent Era. 🛰️</sub>
+  <sub>Apache 2.0 · open infrastructure · no lock-in</sub>
 </div>

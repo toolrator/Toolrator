@@ -133,7 +133,7 @@ Because toolpanel is unauthenticated, `verify-key` accepts any non-empty bearer 
 
 ### The `/device` page
 
-The verification_uri points to `/device`, which is a polished confirmation UI:
+The verification_uri points to `/device`, a single-purpose confirmation page:
 
 - **Two-slot input** — one box for the 4 letters, one for the 4 digits, with the `-` separator baked in visually.
 - **Auto-uppercase**, **auto-strip** of any non-alphanumeric character, **auto-tab** from the letters slot to the digits slot when full, and **backspace-wrap** back to the letters slot.

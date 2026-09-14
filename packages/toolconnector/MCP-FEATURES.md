@@ -41,7 +41,7 @@ This document tracks every MCP 2026-07-28 protocol feature and whether it is imp
 |---|---------|----------|--------|----------|-------|
 | 2.1 | Streamable HTTP transport (primary) | — | ✅ | `mcp-connection.ts` | Already the primary transport. |
 | 2.2 | `Mcp-Method` and `Mcp-Name` request headers | SEP-2243 | ✅ | `mcp-connection.ts` | Added automatically by SDK v2. |
-| 2.3 | `x-mcp-header` custom headers from tool parameters | SEP-2243 | ➖ | — | Server-side concern; not used. The `mcp_server` tool accepts no header parameters, so custom headers are never forwarded. |
+| 2.3 | `x-mcp-header` custom headers from tool parameters | SEP-2243 | ➖ | — | Server-side concern; not applicable to a client. The connector never advertises tool parameters that map to `x-mcp-header` upstream, so it never sends `Mcp-Param-*` headers (the `headers` tool parameter forwards ordinary HTTP headers instead). |
 | 2.4 | Remove SSE stream resumability (`Last-Event-ID`) | SEP-2575 | ✅ | `mcp-connection.ts` | We don't use SSE resumability. |
 | 2.5 | SSE transport (deprecated, 12-month window) | SEP-2596 | ✅ | `mcp-connection.ts` | Supported as fallback. Will be removed when deprecated period ends. |
 
