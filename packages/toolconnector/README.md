@@ -98,6 +98,10 @@ The `toolconnector` exposes exactly **4 client-facing tools** to your AI agent:
   * `notes` (string, optional): Free-text troubleshooting notes to associate with the bookmarked server.
 * **Returns**: List of bookmarks or confirmation.
 
+### Stale-tool-list compensation
+
+The connector advertises `tools.listChanged` and sends `notifications/tools/list_changed` whenever its tool schemas change (e.g. on login). Clients are expected to re-fetch `tools/list`, but many harnesses currently ignore that notification and keep serving the session-start list. To stay usable with them, the connector detects when the client's list is stale and compensates **in-band**: failed calls get an explanation of the likely cause plus the tool's current JSON schema (so the model can retry correctly on its next call), and successful calls of an affected tool get a one-time notice. Fresh clients see none of this.
+
 ---
 
 ## 🔐 Timed Passwordless Device Flow Auth

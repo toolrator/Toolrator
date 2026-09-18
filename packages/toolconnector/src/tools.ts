@@ -19,6 +19,7 @@ import {
   getNoteForServer,
 } from "./favorites.js";
 import { resolveTarget, resolveTargetAsync } from "./target-resolver.js";
+import { registerCurrentSchema } from "./stale-schema.js";
 import {
   createStructuredError,
   formatErrorResponse,
@@ -61,12 +62,18 @@ export function registerAllTools(
   },
   onRefreshSearchConfig?: (apiKey?: string) => Promise<boolean>,
 ): { updateSearchTool: () => void } {
-  // Intercept tool registration: append schema warnings ONLY to search_mcp_ecosystem text outputs
+  // Intercept tool registration: append the schema-staleness one-liner to ALL
+  // tool text outputs (the transport layer in index.ts strips it and attaches
+  // the richer schema-bearing appendix for the responding tool). Also keep the
+  // live zod schema registered so the transport layer can render the current
+  // schema into in-band hints.
   const originalRegisterTool = server.registerTool.bind(server);
   server.registerTool = (name: any, def: any, handler: any) => {
+    const schema = (def && (def.inputSchema ?? def.paramsSchema)) ?? undefined;
+    if (schema) registerCurrentSchema(name, schema);
     return originalRegisterTool(name, def, async (args: any, extra: any) => {
       const result = await handler(args, extra);
-      if (name === "search_mcp_ecosystem" && result && Array.isArray(result.content)) {
+      if (result && Array.isArray(result.content)) {
         for (const item of result.content) {
           if (item.type === "text" && typeof item.text === "string") {
             item.text = checkSchemaWarning(item.text);
@@ -505,6 +512,7 @@ export function registerAllTools(
       inputSchema: newSchema,
       paramsSchema: newSchema
     } as any);
+    registerCurrentSchema("manage_auth", newSchema);
   });
 
   logger.debug("All 4 unified tools registered");
@@ -523,6 +531,7 @@ export function registerAllTools(
         inputSchema: newSchema,
         paramsSchema: newSchema
       } as any);
+      registerCurrentSchema("search_mcp_ecosystem", newSchema);
     }
   };
 }

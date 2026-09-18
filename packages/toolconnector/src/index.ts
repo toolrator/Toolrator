@@ -2,8 +2,19 @@
 
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { McpServer } from "@modelcontextprotocol/server";
+import type { JSONRPCMessage } from "@modelcontextprotocol/server";
 import { loadConfig, Logger, shouldAutoProbePanel, TOOLCONNECTOR_VERSION, TOOLPANEL_PROBE_PATH, TOOLPANEL_PROBE_TIMEOUT_MS, type ToolconnectorConfig } from "./config.js";
 import { ConnectorStateManager, schemaTimestamps } from "./state.js";
+import {
+  isSchemaStale,
+  markClientRefreshed,
+  registerCurrentSchema,
+  getCurrentSchemaJson,
+  alreadyInformed,
+  markInformed,
+  buildStaleErrorAppendix,
+  buildStaleSuccessNotice,
+} from "./stale-schema.js";
 import { AuthClient } from "./auth-client.js";
 import { ExternalMcpClient } from "./external-client.js";
 import { registerAllTools } from "./tools.js";
@@ -228,16 +239,88 @@ async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  // Track when the client requests the tools list
+  // -----------------------------------------------------------------------
+  // In-band schema-staleness compensation for harnesses that ignore
+  // notifications/tools/list_changed (most current clients do).
+  //
+  // Two transport-level wrappers:
+  //  - inbound (onmessage): track `tools/list` fetches (client is fresh) and
+  //    map `tools/call` request ids -> tool name (+ sent args) so responses
+  //    can be attributed.
+  //  - outbound (send): decorate tools/call RESPONSES while the client's
+  //    tool list is stale. This is the ONLY place that sees SDK validation
+  //    rejections — they never reach tool handlers.
+  // -----------------------------------------------------------------------
+  const toolCallMeta = new Map<string, { name: string; args?: unknown }>();
+  const MAX_TRACKED_CALLS = 200;
+
   const originalOnMessage = transport.onmessage;
-  if (originalOnMessage) {
-    transport.onmessage = (msg) => {
-      if (msg && typeof msg === "object" && "method" in msg && msg.method === "tools/list") {
-        schemaTimestamps.lastFetched = Date.now();
+  transport.onmessage = (msg: unknown) => {
+    if (msg && typeof msg === "object" && "method" in (msg as Record<string, unknown>)) {
+      const m = msg as { method?: string; id?: unknown; params?: { name?: unknown; arguments?: unknown } };
+      if (m.method === "tools/list") {
+        markClientRefreshed();
+      } else if (m.method === "tools/call" && m.id !== undefined && m.params && typeof m.params.name === "string") {
+        if (toolCallMeta.size >= MAX_TRACKED_CALLS) {
+          // Drop the oldest entry (Map preserves insertion order).
+          const oldest = toolCallMeta.keys().next().value;
+          if (oldest !== undefined) toolCallMeta.delete(oldest);
+        }
+        toolCallMeta.set(String(m.id), { name: m.params.name, args: m.params.arguments });
       }
-      originalOnMessage.call(transport, msg);
-    };
-  }
+    }
+    originalOnMessage?.call(transport, msg as JSONRPCMessage);
+  };
+
+  const originalSend = transport.send.bind(transport);
+  transport.send = async (message: unknown) => {
+    try {
+      const m = message as
+        | { id?: unknown; result?: { isError?: boolean; content?: Array<{ type?: string; text?: string }> } }
+        | { id?: unknown; error?: { message?: string } }
+        | undefined;
+      if (
+        m && typeof m === "object" && m.id !== undefined && toolCallMeta.has(String(m.id)) &&
+        ("result" in m || "error" in m)
+      ) {
+        const meta = toolCallMeta.get(String(m.id))!;
+        toolCallMeta.delete(String(m.id));
+
+        if (isSchemaStale()) {
+          const schemaJson = getCurrentSchemaJson(meta.name);
+          if ("error" in m && m.error && typeof m.error.message === "string") {
+            // Validation/protocol rejection: attach the full appendix.
+            m.error.message = `${m.error.message}\n\n${buildStaleErrorAppendix(meta.name, meta.args, schemaJson)}`;
+          } else if ("result" in m && m.result && Array.isArray(m.result.content)) {
+            // Tool-level result (reached the handler). Strip the generic
+            // one-liner the handler wrapper may have added, then attach the
+            // richer schema-bearing message.
+            for (const item of m.result.content) {
+              if (item && item.type === "text" && typeof item.text === "string") {
+                item.text = item.text.replace(/\n\n⚠️ SERVER WARNING:[\s\S]*$/, "");
+              }
+            }
+            const isErrorResult = m.result.isError === true;
+            const textItem = m.result.content.find((c) => c && c.type === "text" && typeof c.text === "string");
+            if (isErrorResult) {
+              const appendix = buildStaleErrorAppendix(meta.name, meta.args, schemaJson);
+              if (textItem) textItem.text = `${textItem.text}\n\n${appendix}`;
+              else m.result.content.push({ type: "text", text: appendix });
+            } else if (!alreadyInformed(meta.name)) {
+              const notice = buildStaleSuccessNotice(meta.name, schemaJson);
+              if (notice) {
+                if (textItem) textItem.text = `${textItem.text}\n\n${notice}`;
+                else m.result.content.push({ type: "text", text: notice });
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // Decoration must never break the response path.
+    }
+    return originalSend(message as JSONRPCMessage);
+  };
 
 
   logger.info("Toolconnector connected and ready (stdio)");
