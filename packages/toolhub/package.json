@@ -37,7 +37,7 @@
     "dev": "node --env-file-if-exists=.env --import tsx src/server.ts",
     "prestart": "npm run build",
     "start": "node --env-file-if-exists=.env dist/server.js",
-    "test": "node --import tsx --test tests/**/*.test.ts",
+    "test": "node --import tsx --test tests/**/*.test.ts tests/**/*.test.mjs",
     "eval:search": "node --env-file-if-exists=.env tests/search-eval.mjs",
     "eval:search:update": "node --env-file-if-exists=.env tests/search-eval.mjs --update-baseline",
     "eval:search:real": "node --env-file-if-exists=.env tests/search-eval.mjs --catalog real",

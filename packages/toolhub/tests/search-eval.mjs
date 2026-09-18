@@ -4,13 +4,30 @@
 // ---------------------------------------------------------------------------
 // Boots a real toolhub instance against MeiliSearch, seeds the reference
 // mockup catalog through the admin API, runs 32 server-surface queries plus
-// 16 tool-surface queries and asserts the scores against a checked-in
-// moving baseline (server weighted/p@3, tool p@3, intent accuracy).
+// 16 tool-surface queries and gates the scores (server weighted/p@3, tool
+// p@3, intent accuracy) against a DYNAMIC floor derived from the model's own
+// recent score history (see tests/eval-gate.mjs). Embedding models are not
+// static: run-to-run drift inside the model's observed jitter passes with a
+// warning; only a collapse below anything it recently scored fails.
 //
 // Usage:
 //   node tests/search-eval.mjs [--baseline <file>] [--report <file>]
-//                              [--tolerance <points>] [--update-baseline]
+//                              [--update-baseline] [--force-update-baseline]
+//                              [--tolerance <points>] [--history-limit <n>]
+//                              [--jitter-multiplier <x>] [--warn-bands <n>]
 //                              [--catalog mock|real|<path>]
+//
+//   --update-baseline          record this run in the model's score history;
+//                              canonical scores ratchet up instantly and only
+//                              follow down after --warn-bands consecutive
+//                              sub-canonical runs (never on a failed run)
+//   --force-update-baseline    deliberate re-floor: accept this run's scores
+//                              as the new canonical baseline and reset the
+//                              history to this run (works even on a red run)
+//   --tolerance <points>       minimum wiggle room for 0..100 score kinds
+//                              (default 2 ≈ one rank flip on the fixture;
+//                              the band still widens automatically when the
+//                              model is jumpy)
 //
 //   --catalog mock  checked-in 32-server synthetic fixture (default)
 //   --catalog real  on-demand Smithery benchmark (tests/fixtures/real/catalog.json
@@ -25,8 +42,10 @@
 //   TOOLHUB_EMBEDDING_PROVIDER  embedding provider (baselines are per provider)
 //
 // Exit codes:
-//   0  pass (or baseline bootstrapped)
-//   1  regression vs baseline, seed failure, or runtime error
+//   0  pass or warn (drift inside the model's jitter band; or baseline
+//      bootstrapped)
+//   1  real regression (score below the model's recent range), seed failure,
+//      or runtime error
 // ---------------------------------------------------------------------------
 
 import path from "node:path";
@@ -43,6 +62,7 @@ import {
   readBaseline,
   writeBaseline,
 } from "./eval-utils.mjs";
+import { evaluateGate, nextBaselineSection, GATE_DEFAULTS } from "./eval-gate.mjs";
 
 const DEFAULT_BASELINE = path.join(FIXTURES_DIR, "search-eval-baseline.json");
 
@@ -163,18 +183,27 @@ function stripLegacy(file) {
 }
 
 function parseArgs(argv) {
-  const args = { baseline: DEFAULT_BASELINE, report: path.join(process.cwd(), "search-eval-report.json"), tolerance: 0.5, updateBaseline: false, catalog: "mock" };
+  const args = { baseline: DEFAULT_BASELINE, report: path.join(process.cwd(), "search-eval-report.json"), tolerance: 0.5, toleranceExplicit: false, updateBaseline: false, forceUpdateBaseline: false, catalog: "mock", historyLimit: undefined, jitterMultiplier: undefined, warnBands: undefined };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--baseline") args.baseline = path.resolve(argv[++i]);
     else if (arg === "--report") args.report = path.resolve(argv[++i]);
-    else if (arg === "--tolerance") args.tolerance = Number(argv[++i]);
+    else if (arg === "--tolerance") { args.tolerance = Number(argv[++i]); args.toleranceExplicit = true; }
     else if (arg === "--update-baseline") args.updateBaseline = true;
+    else if (arg === "--force-update-baseline") args.forceUpdateBaseline = true;
+    else if (arg === "--history-limit") args.historyLimit = Number(argv[++i]);
+    else if (arg === "--jitter-multiplier") args.jitterMultiplier = Number(argv[++i]);
+    else if (arg === "--warn-bands") args.warnBands = Number(argv[++i]);
     else if (arg === "--catalog") args.catalog = argv[++i];
     else throw new Error(`Unknown argument: ${arg}`);
   }
   if (!Number.isFinite(args.tolerance) || args.tolerance < 0) {
     throw new Error(`Invalid --tolerance: ${args.tolerance}`);
+  }
+  for (const [name, value] of [["--history-limit", args.historyLimit], ["--jitter-multiplier", args.jitterMultiplier], ["--warn-bands", args.warnBands]]) {
+    if (value !== undefined && (!Number.isFinite(value) || value <= 0)) {
+      throw new Error(`Invalid ${name}: ${value}`);
+    }
   }
   return args;
 }
@@ -403,50 +432,69 @@ async function main() {
       console.log("[eval] Migrated baseline to per-provider sections.");
     }
     let regression = false;
+    let gateVerdict = null;
 
     // Existing baselines predate the tool surface + intent metrics. Treat a
     // section without the extended metrics as un-baselined and bootstrap it.
     const isExtended = baseline && typeof baseline.toolPrecisionAt3 === "number" && typeof baseline.intentAccuracy === "number";
 
+    // Gate tunables: the minimum wiggle room comes from --tolerance (default
+    // 2 for 0..100 kinds, scaled for ratios); the band widens automatically
+    // with the model's observed jitter (see tests/eval-gate.mjs).
+    const gateDefaults = {
+      ...(args.historyLimit !== undefined ? { historyLimit: args.historyLimit } : {}),
+      ...(args.jitterMultiplier !== undefined ? { jitterMultiplier: args.jitterMultiplier } : {}),
+      ...(args.warnBands !== undefined ? { warnBands: args.warnBands } : {}),
+    };
+    const minJitterOverrides = args.toleranceExplicit
+      ? { points: args.tolerance, percent: args.tolerance, ratio: args.tolerance / 100 }
+      : undefined;
+    const gateTunables = minJitterOverrides ? { ...gateDefaults, minJitter: minJitterOverrides } : gateDefaults;
+
     if (!baseline || !isExtended) {
+      // Bootstrap: this run defines the baseline; nothing to gate against yet.
+      const boot = nextBaselineSection({
+        baselineSection: isExtended ? baseline : null,
+        metrics,
+        verdict: "pass",
+        defaults: gateDefaults,
+        force: !baseline,
+      });
       writeBaseline(args.baseline, {
         ...stripLegacy(baselineFile),
-        [baselineKey]: { ...metrics, queries: queries.length, toolQueries: toolQueries.length },
+        [baselineKey]: { ...boot.section, queries: queries.length, toolQueries: toolQueries.length },
       });
       console.log(`[eval] ${baseline ? "Extended" : "Bootstrapped"} baseline for "${baselineKey}" from this run.`);
     } else {
-      const weightedFloor = baseline.weighted - args.tolerance;
-      const p3Floor = baseline.precisionAt3 - args.tolerance / 100;
-      const toolP3Floor = baseline.toolPrecisionAt3 - args.tolerance / 100;
-      const intentFloor = baseline.intentAccuracy - 2;
-      regression =
-        metrics.weighted < weightedFloor ||
-        metrics.precisionAt3 < p3Floor ||
-        metrics.toolPrecisionAt3 < toolP3Floor ||
-        metrics.intentAccuracy < intentFloor;
+      const gate = evaluateGate({ metrics, baselineSection: baseline, defaults: gateTunables });
+      gateVerdict = gate.verdict;
+      regression = gate.verdict === "fail";
 
-      console.log(`[eval] Baseline (${baselineKey}):  weighted=${baseline.weighted} (floor ${weightedFloor.toFixed(2)}), p@3=${baseline.precisionAt3} (floor ${p3Floor.toFixed(4)}), toolP@3=${baseline.toolPrecisionAt3} (floor ${toolP3Floor.toFixed(4)}), intent=${baseline.intentAccuracy} (floor ${intentFloor.toFixed(1)})`);
-      if (regression) {
-        console.error(`[eval] REGRESSION: weighted ${metrics.weighted} < ${weightedFloor}, p@3 ${metrics.precisionAt3} < ${p3Floor}, toolP@3 ${metrics.toolPrecisionAt3} < ${toolP3Floor}, or intent ${metrics.intentAccuracy} < ${intentFloor}`);
+      console.log(`[eval] Gate (${baselineKey}): ${gate.detail}`);
+      if (gate.verdict === "fail") {
+        console.error(`[eval] REGRESSION: ${gate.failedMetrics.join(", ")} below the model's recent range — real quality drop, not model drift.`);
         failed = true;
+      } else if (gate.verdict === "warn") {
+        console.log(`[eval] WARN — drift inside the model's observed jitter band (${gate.warnedMetrics.join(", ")}). Not a regression; passing. Use --force-update-baseline to accept this level deliberately.`);
       } else {
-        console.log("[eval] PASS — scores within baseline tolerance.");
+        console.log("[eval] PASS — scores within the model's dynamic band.");
       }
 
-      if (args.updateBaseline && !regression) {
-        const changed =
-          metrics.weighted !== baseline.weighted ||
-          metrics.precisionAt1 !== baseline.precisionAt1 ||
-          metrics.precisionAt3 !== baseline.precisionAt3 ||
-          metrics.toolWeighted !== baseline.toolWeighted ||
-          metrics.toolPrecisionAt1 !== baseline.toolPrecisionAt1 ||
-          metrics.toolPrecisionAt3 !== baseline.toolPrecisionAt3 ||
-          metrics.intentAccuracy !== baseline.intentAccuracy;
-        if (changed) {
+      if (args.forceUpdateBaseline || (args.updateBaseline && !regression)) {
+        const force = args.forceUpdateBaseline;
+        const next = nextBaselineSection({
+          baselineSection: baseline,
+          metrics,
+          verdict: gate.verdict,
+          defaults: gateDefaults,
+          force,
+        });
+        if (next.changed || force) {
           writeBaseline(args.baseline, {
             ...stripLegacy(baselineFile),
-            [baselineKey]: { ...metrics, queries: queries.length, toolQueries: toolQueries.length },
+            [baselineKey]: { ...next.section, queries: queries.length, toolQueries: toolQueries.length },
           });
+          for (const note of next.notes) console.log(`[eval] baseline: ${note}`);
         } else {
           console.log("[eval] Baseline unchanged — no commit needed.");
         }
@@ -459,6 +507,9 @@ async function main() {
       embeddingModel: remoteModel,
       metrics,
       baseline: baseline ? { weighted: baseline.weighted, precisionAt1: baseline.precisionAt1, precisionAt3: baseline.precisionAt3, toolPrecisionAt3: baseline.toolPrecisionAt3, intentAccuracy: baseline.intentAccuracy } : null,
+      gate: gateVerdict
+        ? { verdict: gateVerdict, forcedRefloor: args.forceUpdateBaseline }
+        : { verdict: "bootstrap", forcedRefloor: false },
       regression,
       results,
       toolResults,
