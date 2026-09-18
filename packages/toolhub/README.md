@@ -83,7 +83,7 @@ curl "http://localhost:7600/search?q=github&tags=code"
 
 # Index a new MCP server
 curl -X POST http://localhost:7600/admin/index \
-  -H "Authorization: Bearer dev-admin-token" \
+  -H "Authorization: Bearer $SEARCH_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"documents": [{"mcp_name": "my-server", "display_name": "My Server", "tags": ["code"]}]}'
 ```
@@ -159,7 +159,7 @@ All settings are via environment variables:
 |:---|:---|:---|
 | `HOST` | `127.0.0.1` | Host/interface to bind — `127.0.0.1` (loopback only) or `0.0.0.0` to expose externally |
 | `PORT` | `7600` | HTTP server port |
-| `SEARCH_ADMIN_TOKEN` | `dev-admin-token` | Bearer token for admin endpoints |
+| `SEARCH_ADMIN_TOKEN` | _(empty)_ | Bearer token for admin endpoints. Required (or run loopback-only) — see the admin-token guard in Known Issues |
 | `SEARCH_BACKEND` | `meilisearch` | Search backend: `meilisearch` or `memory` |
 | `MEILI_URL` | `http://localhost:7700` | MeiliSearch server URL |
 | `MEILI_SEARCH_KEY` | `` | MeiliSearch search-only API key |
@@ -378,3 +378,4 @@ To add a new backend, implement the `SearchAdapter` interface in `src/adapters/`
 - **Transitive dependency advisories** — `npm audit` reports vulnerabilities in `onnxruntime-web` and `sharp`, pulled in transitively via `@xenova/transformers` (used for local ONNX embeddings). The only automated remediation is a breaking downgrade to `@xenova/transformers@1.x`, which would change the embedder API. This is tracked.
 
 - **Loopback-only by default** — the server binds `127.0.0.1` (see `HOST`). To expose it to other machines, set `HOST=0.0.0.0` explicitly and put it behind a firewall/reverse proxy; the admin endpoints are only protected by `SEARCH_ADMIN_TOKEN`.
+- **Admin-token guard** — the server **refuses to start** when bound to a non-loopback interface (`HOST=0.0.0.0`) without a `SEARCH_ADMIN_TOKEN` (or with the legacy well-known `dev-admin-token`). Loopback binds with no token only print a warning, so local development keeps working. CORS is enabled on public routes only, never on `/admin/*`, and admin-token comparison is constant-time.

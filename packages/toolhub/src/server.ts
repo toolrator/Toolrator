@@ -9,6 +9,7 @@ import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { serve } from "@hono/node-server";
+import { timingSafeEqual, createHash } from "node:crypto";
 
 import { loadConfig, type SearchEngineConfig } from "./config.js";
 import { SearchService } from "./search-service.js";
@@ -52,7 +53,14 @@ function adminAuth(config: SearchEngineConfig) {
       ? authHeader.slice(7).trim()
       : "";
 
-    if (!token || token !== config.adminToken) {
+    // Constant-time compare so response timing does not leak token bytes.
+    // Both sides are hashed to equal length first (a bare length check would
+    // itself leak length information).
+    const provided = createHash("sha256").update(token).digest();
+    const expected = createHash("sha256").update(config.adminToken).digest();
+    const authorized = token.length > 0 && timingSafeEqual(provided, expected);
+
+    if (!authorized) {
       return c.json({ error: "unauthorized" }, 401);
     }
 
@@ -70,7 +78,14 @@ export function createApp(
 ): Hono {
   const app = new Hono();
 
-  app.use("*", cors());
+  // CORS: public routes only. The admin endpoints are bearer-token protected;
+  // reflecting credentials cross-origin widens the blast radius of a leaked
+  // token for no legitimate browser use case.
+  const publicCors = cors();
+  app.use("*", async (c, next) => {
+    if (c.req.path.startsWith("/admin")) return next();
+    return publicCors(c, next);
+  });
   app.use("*", logger());
 
   // Request timing header
@@ -370,10 +385,26 @@ export function createApp(
 async function main(): Promise<void> {
   const config = loadConfig();
   console.log(`[search] Initializing Toolhub (backend: ${config.searchBackend})...`);
-  if (config.adminToken === "dev-admin-token") {
+
+  // Admin-token guard. Binding to a network interface with no token — or the
+  // well-known dev token — would expose full reindex/delete to anyone who can
+  // reach the port, so refuse to start in that case. Loopback binds keep a
+  // warn-only path for local development.
+  const loopback = new Set(["127.0.0.1", "localhost", "::1"]);
+  const weakToken =
+    !config.adminToken || config.adminToken === "dev-admin-token";
+  if (!loopback.has(config.host) && weakToken) {
+    console.error(
+      `[search] REFUSING to start: HOST is '${config.host}' (network-exposed) but ` +
+        `${!config.adminToken ? "SEARCH_ADMIN_TOKEN is not set" : "SEARCH_ADMIN_TOKEN is the well-known dev token"}. ` +
+        "Set a unique SEARCH_ADMIN_TOKEN (e.g. `openssl rand -hex 24`) or bind to 127.0.0.1.",
+    );
+    process.exit(1);
+  }
+  if (weakToken) {
     console.warn(
-      "[search] WARNING: running with the default SEARCH_ADMIN_TOKEN (dev-admin-token). " +
-        "Set a unique SEARCH_ADMIN_TOKEN in production — admin endpoints are unprotected otherwise.",
+      "[search] WARNING: running with no SEARCH_ADMIN_TOKEN — admin endpoints are unprotected. " +
+        "Set a unique SEARCH_ADMIN_TOKEN in production.",
     );
   }
 

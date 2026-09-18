@@ -163,7 +163,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   return {
     host: readString(env, "HOST", "127.0.0.1"),
     port: readInt(env, "PORT", 7600),
-    adminToken: readString(env, "SEARCH_ADMIN_TOKEN", "dev-admin-token"),
+    adminToken: readString(env, "SEARCH_ADMIN_TOKEN", ""),
     searchBackend,
     meiliUrl: readString(env, "MEILI_URL", "http://localhost:7700"),
     meiliSearchKey: readString(env, "MEILI_SEARCH_KEY", ""),
