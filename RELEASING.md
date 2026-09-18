@@ -100,5 +100,28 @@ If a publish ever fails auth, check the Trusted Publisher configuration on
 npmjs.com (org, repo, and workflow file name must match) before anything
 else — do **not** reintroduce a long-lived token as a "fix".
 
+### Trusted Publisher gotcha (hit for real on 2026-09-18, toolconnector 0.2.0)
+
+npm reports a Trusted Publisher auth failure as a **misleading `E404` on
+`PUT https://registry.npmjs.org/<pkg>`** — even though provenance signing
+via GitHub OIDC succeeds (watch for the "Signed provenance statement" notice
+right before the error). That combination = the Trusted Publisher connection
+rejected the publish; it is **not** a missing package and **not** a workflow
+bug.
+
+Fix, in order:
+
+1. On npmjs.com → package → Settings → Trusted publishing, check the
+   connection's **Allowed actions**: it must permit **`npm publish`** (not
+   stage-only). The "Require two-factor authentication and disallow tokens"
+   package setting is fine to keep — OIDC publishes are not bypass tokens —
+   but flipping package-level security settings can silently desync the
+   connection.
+2. Connections **cannot be edited in place** — delete and re-create it
+   (org `toolrator`, repo `Toolrator` — case-sensitive — workflow
+   `npm-publish.yml`, environment empty, `npm publish` allowed).
+3. Re-run the failed job from the Actions tab (job → "Re-run failed jobs")
+   or re-push the tag. No new version or tag is needed for a rerun.
+
 The first publish of each package claimed its name on npm. Verify what is
 live with `npm view @toolrator/<name> version`.
