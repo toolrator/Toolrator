@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-09-11T16:28:15.882Z",
+  "updatedAt": "2026-09-18T15:15:45.694Z",
   "local": {
     "weighted": 80,
     "precisionAt1": 0.7188,
@@ -11,7 +11,15 @@
     "toolQueries": 16,
     "intentAccuracy": 63,
     "toolEvidenceRate": 100,
-    "falseToolRate": 0
+    "falseToolRate": 0,
+    "__history": [
+      {
+        "weighted": 78,
+        "precisionAt3": 0.875,
+        "toolPrecisionAt3": 0.9375,
+        "intentAccuracy": 63
+      }
+    ]
   },
   "openai-compatible/@cf/baai/bge-small-en-v1.5": {
     "weighted": 82,
