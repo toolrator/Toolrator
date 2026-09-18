@@ -52,15 +52,15 @@
     "node": ">=20"
   },
   "dependencies": {
-    "zod": "^4.6.5",
+    "@modelcontextprotocol/client": "^2.0.0-beta.3",
     "@modelcontextprotocol/server": "^2.0.0-beta.3",
-    "@modelcontextprotocol/client": "^2.0.0-beta.3"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@hono/node-server": "^2.1.1",
-    "hono": "^4.6.11",
     "@types/node": "^26.5.1",
+    "hono": "^4.6.11",
     "tsx": "^4.23.13",
-    "typescript": "^5.7.2"
+    "typescript": "^7.0.2"
   }
 }
