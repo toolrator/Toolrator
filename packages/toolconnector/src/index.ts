@@ -34,6 +34,17 @@ import {
 import { stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { withDeadline } from "./deadline.js";
+
+/**
+ * Hard budget for boot-time remote resolution (toolpanel probe + verify-key
+ * retries + search-config fetch). The tools registered for the FIRST
+ * `tools/list` reflect whatever resolved within this budget; anything slower
+ * completes in the background and hot-swaps schemas via the existing
+ * list_changed + stale-schema compensation machinery. 4s keeps client boot
+ * snappy while covering a healthy network round-trip comfortably.
+ */
+const BOOT_REMOTE_DEADLINE_MS = 4000;
 
 async function main(): Promise<void> {
   // 1. Load configuration
@@ -49,13 +60,17 @@ async function main(): Promise<void> {
   await stateManager.init(config.configDir, config.apiKey);
 
   const registry = new SearchRegistry();
+  const bootDeadline = Date.now() + BOOT_REMOTE_DEADLINE_MS;
   // Compute the resolved default base URL up front so the implicit default
   // engine in `loadSearchConfig` (used when no engines come from any source)
   // points at the same upstream that the rest of the connector will use.
   // Also feeds the AuthClient's pinned upstream so that device-flow start /
   // poll / verify-key all go to toolpanel when it's alive.
   // Falls back to the configured authUrl when nothing is reachable.
-  const initialDecision = await pickRemoteBaseUrl(config, logger, "");
+  const initialDecision = await withDeadline(
+    pickRemoteBaseUrl(config, logger, ""),
+    bootDeadline,
+  );
   const resolvedDefaultBaseUrl = initialDecision?.baseUrl ?? config.authUrl;
 
   // 3. Create HTTP clients — AuthClient is pinned to the resolved URL so the
@@ -99,8 +114,16 @@ async function main(): Promise<void> {
   };
 
   // When authenticated + (auto OR toolpanel) mode, the server config is authoritative.
+  // Bounded by the same 4s boot deadline: if the full remote pull (verify-key +
+  // config fetch) exceeds it, the local fallback is registered on time. The
+  // background pull still completes and warms the persisted config cache; the
+  // next auth-state change (login/logout) re-resolves from it. No client-visible
+  // startup hang either way.
   if (config.searchConfigMode !== "file" && initialState.apiKey) {
-    const remote = await pullRemoteConfig(initialState.apiKey, config, stateManager, logger);
+    const remote = await withDeadline(
+      pullRemoteConfig(initialState.apiKey, config, stateManager, logger),
+      bootDeadline,
+    );
     if (remote) {
       currentEngines = await applySearchConfig(remote, registry, config, logger);
       searchConfig = remote;
