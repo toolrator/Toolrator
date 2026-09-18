@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-18
+
+### Added
+
+- `toolconnector`: in-band stale-tool-list compensation. Many MCP clients ignore
+  `notifications/tools/list_changed` and keep serving the session-start tool list,
+  so mid-session schema changes (e.g. after login) fail with confusing validation
+  errors. The connector now detects the stale state and appends the likely cause
+  plus the tool's current JSON schema to failed calls, and a one-time notice to
+  successful calls of affected tools. Fresh clients see no difference.
+
 ## [0.1.0] - 2026-09-11
 
 ### Added
