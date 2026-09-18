@@ -6,6 +6,10 @@ Toolpanel is intentionally **lightweight**: a single Node process, Hono HTTP ser
 
 > **⚠️ Local-only by design.** Toolpanel ships with **no authentication**. The HTTP server binds to `127.0.0.1` by default. Do **not** bind it to a public interface (`HOST=0.0.0.0`). The README and server logs repeat this warning. This project is a template — add a reverse proxy + auth if you need anything more.
 
+## 🟢 Project Status
+
+**v0.1.1** — first release through the hardened per-package release pipeline (`toolpanel-v*` release tags; typecheck + build gates; SLSA provenance via npm Trusted Publishing). No functional changes since v0.1.0.
+
 ---
 
 ## Quick start
