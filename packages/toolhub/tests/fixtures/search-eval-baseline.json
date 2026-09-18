@@ -1,7 +1,7 @@
 {
-  "updatedAt": "2026-09-18T15:15:45.694Z",
+  "updatedAt": "2026-09-18T15:32:48.996Z",
   "local": {
-    "weighted": 80,
+    "weighted": 78,
     "precisionAt1": 0.7188,
     "precisionAt3": 0.875,
     "queries": 32,
