@@ -14,13 +14,13 @@ name: Publish to NPM Registry
 # The easiest way to tag is GitHub's Releases page ("Draft a new release"),
 # which creates the tag and fires this workflow in one click.
 #
-# Auth mode (OIDC-first, token fallback):
-#   - Runners use Node 24 (npm >= 11.5.1), so the CLI automatically uses OIDC
-#     (Trusted Publishing) when the package has a Trusted Publisher configured
-#     on npmjs.com, and only falls back to NPM_TOKEN otherwise.
-#   - Both packages now have Trusted Publishers configured. After the first
-#     green OIDC publish for each, remove the NODE_AUTH_TOKEN env lines below,
-#     delete the NPM_TOKEN secret, and revoke the npm token.
+# Auth mode (OIDC-only since 2026-09-18):
+#   - Runners use Node 24 (npm >= 11.5.1), so the CLI authenticates via OIDC
+#     (Trusted Publishing) against the Trusted Publisher configured on
+#     npmjs.com for each package.
+#   - Validated end-to-end: toolconnector 0.1.1 and toolpanel 0.1.1 both
+#     published green via OIDC with SLSA provenance. The NPM_TOKEN secret has
+#     been deleted and the npm token revoked — there is no token fallback.
 
 on:
   push:
@@ -79,11 +79,8 @@ jobs:
 
       - name: Publish to NPM
         working-directory: packages/toolconnector
-        # OIDC (Trusted Publishing) is preferred by npm >= 11.5.1; the token
-        # below is only a fallback until OIDC is validated for this package.
+        # OIDC Trusted Publishing only — no token fallback since 2026-09-18.
         run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   publish-toolpanel:
     name: Publish @toolrator/toolpanel
@@ -127,8 +124,5 @@ jobs:
 
       - name: Publish to NPM
         working-directory: packages/toolpanel
-        # OIDC (Trusted Publishing) is preferred by npm >= 11.5.1; the token
-        # below is only a fallback until OIDC is validated for this package.
+        # OIDC Trusted Publishing only — no token fallback since 2026-09-18.
         run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

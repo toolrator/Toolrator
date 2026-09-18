@@ -86,14 +86,19 @@ the version from that package's `package.json`.
 - **Never rewrite a published version.** Fix forward with a new one.
 - Only maintainers can tag, so contributor PRs can never trigger a publish.
 
-## One-time maintainer setup (npm)
+## Publishing authentication (OIDC Trusted Publishing)
 
-1. Create an account on [npmjs.com](https://www.npmjs.com) and enable 2FA.
-2. Create the free npm **organization** `toolrator` — this is what owns the
-   `@toolrator/*` package names.
-3. Generate an **automation token**: npm → Access Tokens → *Generate New
-   Token* → type **Automation** (it may publish, but not manage the account).
-4. Add it to GitHub: repo → **Settings → Secrets and variables → Actions →
-   New repository secret** → name `NPM_TOKEN`, paste the token as the value.
-5. The first publish of each package claims its name on npm. Verify with
-   `npm view @toolrator/toolconnector version`.
+Publishes authenticate via **GitHub OIDC Trusted Publishing** — there is no
+`NPM_TOKEN` secret and no token fallback. Both packages have Trusted
+Publishers configured on npmjs.com (org `toolrator`, repo `Toolrator`,
+workflow `npm-publish.yml`), and both were validated end-to-end on
+2026-09-18: `toolconnector@0.1.1` and `toolpanel@0.1.1` published green via
+OIDC with SLSA provenance attestations. The old `NPM_TOKEN` secret was
+deleted from the repo and the npm token revoked the same day.
+
+If a publish ever fails auth, check the Trusted Publisher configuration on
+npmjs.com (org, repo, and workflow file name must match) before anything
+else — do **not** reintroduce a long-lived token as a "fix".
+
+The first publish of each package claimed its name on npm. Verify what is
+live with `npm view @toolrator/<name> version`.
