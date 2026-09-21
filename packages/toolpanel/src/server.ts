@@ -6,6 +6,7 @@ import { readFile } from "node:fs/promises";
 import { join, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
+import { pathToFileURL } from "node:url";
 import { config } from "./config.js";
 import { auth } from "./routes/auth.js";
 import { connector } from "./routes/connector.js";
@@ -30,6 +31,12 @@ const MIME: Record<string, string> = {
   ".png": "image/png",
 };
 
+/**
+ * Build the fully-mounted Hono app without starting the HTTP listener.
+ * Exported so tests (and any embedded use) can exercise every route via
+ * app.request() — the same testability seam toolhub's createApp() provides.
+ */
+export function createApp(): Hono {
 const app = new Hono();
 
 // Static assets at /static/*
@@ -66,14 +73,26 @@ app.onError((err, c) => {
   return c.json({ error: "server_error", message: (err as Error).message }, 500);
 });
 
-serve({ fetch: app.fetch, hostname: config.host, port: config.port }, (info) => {
+return app;
+}
+
+// Start listening only when this module is the entry point (dev/start scripts).
+// When imported by tests, no server is bound.
+const isDirectRun =
+  !!process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isDirectRun) {
+  const app = createApp();
+  serve({ fetch: app.fetch, hostname: config.host, port: config.port }, (info) => {
   console.log(`\n  Toolpanel`);
   console.log(`  → http://${config.host}:${info.port}`);
   console.log(`  → public URL: ${config.publicUrl}`);
   console.log(`  → liveness:  ${config.publicUrl}/.well-known/toolpanel-alive`);
   console.log(`  → search engine: ${config.searchEngineBaseUrl}`);
   console.log(`  → config dir: ${config.configDir}\n`);
-  if (config.host !== "127.0.0.1" && config.host !== "localhost") {
-    console.warn(`  WARNING: toolpanel has NO authentication; binding HOST=${config.host} exposes it.\n`);
-  }
-});
+    if (config.host !== "127.0.0.1" && config.host !== "localhost") {
+      console.warn(`  WARNING: toolpanel has NO authentication; binding HOST=${config.host} exposes it.\n`);
+    }
+  });
+}

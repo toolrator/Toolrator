@@ -40,7 +40,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "dev": "node --env-file-if-exists=.env --import tsx src/server.ts",
     "prestart": "npm run build",
-    "start": "node --env-file-if-exists=.env dist/server.js"
+    "start": "node --env-file-if-exists=.env dist/server.js",
+    "test": "node --import tsx --test tests/**/*.test.ts"
   },
   "engines": {
     "node": ">=22.9"

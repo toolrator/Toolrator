@@ -45,3 +45,7 @@ jobs:
       - name: Build Code
         working-directory: packages/toolpanel
         run: npm run build
+
+      - name: Run Tests
+        working-directory: packages/toolpanel
+        run: npm test

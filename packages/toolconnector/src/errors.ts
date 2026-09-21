@@ -90,7 +90,7 @@ export function classifyUpstreamError(
     });
   }
 
-  if (code === -32022 || message.includes("unsupported protocol version") || message.includes("UnsupportedProtocolVersion")) {
+  if (code === -32022 || message.includes("unsupported protocol version") || rawMessage.includes("UnsupportedProtocolVersion")) {
     return createStructuredError("unsupported_protocol_version", {
       reason: "unsupported_protocol_version",
       required_step: "The MCP server uses an unsupported protocol version. Please upgrade toolconnector or contact support.",
@@ -98,7 +98,7 @@ export function classifyUpstreamError(
     });
   }
 
-  if (code === -32020 || message.includes("header mismatch") || message.includes("HeaderMismatch")) {
+  if (code === -32020 || message.includes("header mismatch") || rawMessage.includes("HeaderMismatch")) {
     return createStructuredError("header_mismatch", {
       reason: "header_mismatch",
       required_step: "The HTTP headers did not match the request payload.",

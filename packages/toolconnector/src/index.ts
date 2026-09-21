@@ -354,10 +354,19 @@ async function main(): Promise<void> {
   });
 }
 
-main().catch((err) => {
-  console.error("[toolconnector:fatal]", err);
-  process.exit(1);
-});
+// Start only when this module is the entry point (the published bin / dev
+// script). When imported for tests, nothing runs and no transport is bound.
+import { pathToFileURL } from "node:url";
+const isDirectRun =
+  !!process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isDirectRun) {
+  main().catch((err) => {
+    console.error("[toolconnector:fatal]", err);
+    process.exit(1);
+  });
+}
 
 // ── Boot helper functions ──
 
@@ -513,7 +522,7 @@ async function pullRemoteConfig(
  * Returns `null` only when mode is `toolpanel` AND toolpanel is unreachable,
  * which signals "do not retry this run; surface the error to the caller".
  */
-async function pickRemoteBaseUrl(
+export async function pickRemoteBaseUrl(
   config: ToolconnectorConfig,
   logger: Logger,
   _apiKey: string,
@@ -566,7 +575,7 @@ async function pickRemoteBaseUrl(
  *
  * Probe times out after `TOOLPANEL_PROBE_TIMEOUT_MS`. Never throws.
  */
-async function isToolpanelAlive(toolpanelUrl: string, logger: Logger): Promise<boolean> {
+export async function isToolpanelAlive(toolpanelUrl: string, logger: Logger): Promise<boolean> {
   const url = `${toolpanelUrl}${TOOLPANEL_PROBE_PATH}`;
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), TOOLPANEL_PROBE_TIMEOUT_MS);

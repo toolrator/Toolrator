@@ -333,7 +333,13 @@ export class SearchService {
       const home = topTool.server_mcp_name;
       const homeDominates = topServer?.mcp_name === home;
       const competitor = serverHits.find((h) => h.mcp_name !== home) ?? topServer;
-      const comparisonScore = homeDominates ? scoreOf(competitor) : scoreOf(topServer);
+      const comparisonScore = homeDominates
+        ? competitor
+          ? scoreOf(competitor)
+          : 0
+        : topServer
+          ? scoreOf(topServer)
+          : 0;
       const requiredMargin = homeDominates
         ? this.config.intentToolMargin + 0.05
         : this.config.intentToolMargin;
@@ -574,6 +580,10 @@ function buildToolHits(
 
 /** Best available relevance score of a hit (hybrid ranking score). */
 function scoreOf(hit: ToolDocumentHit | SearchHit): number {
+  // Defensive: classifyIntent can reach here with undefined competitors when
+  // a tool-index hit has no matching server hit yet (e.g. tools synced but
+  // server index still empty). Throwing here turned a whole /search 500.
+  if (!hit) return 0;
   const s = (hit as any)._rankingScore ?? (hit as any)._score;
   return typeof s === "number" && Number.isFinite(s) ? s : 0;
 }

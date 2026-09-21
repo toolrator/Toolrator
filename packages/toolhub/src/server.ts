@@ -421,10 +421,19 @@ async function main(): Promise<void> {
   });
 }
 
-main().catch((err) => {
-  console.error("[search] Fatal startup error:", err);
-  process.exit(1);
-});
+// Start only when this module is the entry point (dev/start scripts).
+// When imported for tests (createApp), no adapter is created and no port is bound.
+import { pathToFileURL } from "node:url";
+const isDirectRun =
+  !!process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isDirectRun) {
+  main().catch((err) => {
+    console.error("[search] Fatal startup error:", err);
+    process.exit(1);
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
