@@ -8,7 +8,7 @@ Toolpanel is intentionally **lightweight**: a single Node process, Hono HTTP ser
 
 ## 🟢 Project Status
 
-**v0.1.1** — first release through the hardened per-package release pipeline (`toolpanel-v*` release tags; typecheck + build gates; SLSA provenance via npm Trusted Publishing). No functional changes since v0.1.0.
+**v0.2.0** — Runtime dependency refresh: `@hono/node-server` 2.x, `zod` 4.6.x, `@types/node` 26, and `"types": ["node"]` declared explicitly in the tsconfig. No functional API changes.
 
 ---
 

@@ -1,6 +1,6 @@
 {
   "name": "@toolrator/toolconnector",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Local stdio MCP bridge connecting AI agents to search-engine backends (via toolpanel or any compatible upstream).",
   "keywords": [

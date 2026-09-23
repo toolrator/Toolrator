@@ -10,7 +10,7 @@
 
 ## 🟢 Project Status
 
-**v0.1.1** — Adopts [MCP 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28) (official stable revision: stateless, per-request capabilities, MRTR, Tasks extension). See [`MCP-FEATURES.md`](./MCP-FEATURES.md) for the full compliance matrix.
+**v0.3.0** — Boot-time remote registry resolution is now bounded by a 4-second timeout, so an unreachable registry can no longer stall startup. Adopts [MCP 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28) (official stable revision: stateless, per-request capabilities, MRTR, Tasks extension). See [`MCP-FEATURES.md`](./MCP-FEATURES.md) for the full compliance matrix.
 
 **Requirements**: Node.js >= 20.
 
