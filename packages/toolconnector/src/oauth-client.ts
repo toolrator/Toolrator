@@ -232,6 +232,9 @@ export class OAuthClient {
         state: "",
         issuer: as.issuer,
         deviceCode: flow.device_code,
+        // Remembered so status output / tests can surface what the user
+        // must type at the verification URL.
+        userCode: flow.user_code,
         createdAt: Date.now(),
         expiresAt: Date.now() + (flow.expires_in ?? 900) * 1000,
       };

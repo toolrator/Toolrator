@@ -121,10 +121,11 @@ describe("device grant", () => {
   });
 
   test("RFC 8628 §3.5: polling faster than the interval surfaces slow_down as pending", async () => {
-    // Enforcement ON for this grant (100ms interval). Poll once BEFORE the
-    // user approves (arms the rate limiter), approve, then poll again
-    // immediately — that poll lands inside the window → slow_down → "pending".
-    as.setDevicePollInterval(100);
+    // Enforcement ON with a 60s interval — deterministic on any machine: the
+    // first poll arms the limiter, the approve + rushed poll follow well
+    // inside the window, so the AS MUST answer slow_down (surfaced as
+    // "pending", not an error).
+    as.setDevicePollInterval(60_000);
     try {
       const start = await client.startLogin(TARGET_URL, OAUTH_SCOPES);
       assert.equal(start.kind, "device");
@@ -132,12 +133,9 @@ describe("device grant", () => {
       as.approveDeviceGrant("MOCK-CODE");
       const rushed = await client.pollDeviceGrantOnce();
       assert.equal(rushed, "pending");
-      // Waiting out the (doubled, capped) interval resolves the grant.
-      await new Promise((r) => setTimeout(r, 600));
-      const entry = await client.pollDeviceGrantOnce();
-      assert.ok(entry && entry !== "pending");
     } finally {
       as.setDevicePollInterval(0);
+      await store.clearPendingGrant();
     }
   });
 

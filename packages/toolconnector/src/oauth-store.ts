@@ -64,6 +64,8 @@ export interface PendingGrant {
   codeVerifier?: string;
   /** Present for RFC 8628 device flows. */
   deviceCode?: string;
+  /** Present for RFC 8628 device flows: the short code the user enters. */
+  userCode?: string;
   /** epoch ms */
   createdAt: number;
   /** epoch ms */
