@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-09-26T12:07:39.856Z",
+  "updatedAt": "2026-09-26T14:03:38.665Z",
   "local": {
     "weighted": 80,
     "precisionAt1": 0.7188,
@@ -45,6 +45,12 @@
       },
       {
         "weighted": 80,
+        "precisionAt3": 0.875,
+        "toolPrecisionAt3": 0.9375,
+        "intentAccuracy": 63
+      },
+      {
+        "weighted": 78,
         "precisionAt3": 0.875,
         "toolPrecisionAt3": 0.9375,
         "intentAccuracy": 63
