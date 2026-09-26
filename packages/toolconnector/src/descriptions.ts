@@ -39,8 +39,12 @@ export function describeMcpServer(state: ConnectorState): string {
   let base = (
     "Interact with any external MCP server. This is a generic JSON-RPC passthrough: " +
     "supply the server's http(s) URL as 'target', the protocol 'method', the optional 'params' object, " +
-    "and optional 'headers' (e.g. { 'Authorization': 'Bearer <token>' }) — " +
-    "the server's raw response is returned.\n\n" +
+    "and optional 'headers' — the server's raw response is returned.\n\n" +
+    "Authentication: preferred is manage_auth with action 'start_oauth' — the connector performs a " +
+    "standard OAuth 2.1 login, stores the tokens, and attaches them automatically on every call to " +
+    "that server (also on 401 retries). Only use the 'headers' parameter as a LAST RESORT for servers " +
+    "with no OAuth surface and no stored credentials (e.g. { 'Authorization': 'Bearer <token>' } or " +
+    "{ 'x-api-key': '<key>' }); explicit headers override the stored OAuth tokens.\n\n" +
     "Common methods:\n" +
     "- 'tools/list' — list the server's tools. Summarized automatically when there are more than 6 " +
     "(each tool shows a 'param_hint' listing its parameters) to save context.\n" +
@@ -75,11 +79,18 @@ export function describeManageAuth(
 ): string {
   let base =
     "Manage your authentication against the configured upstream. " +
-    "Logout must NEVER be performed unless the user explicitly asks for it — never log out on your own, even if authentication looks broken, a verification fails, or you believe the session is invalid; surface the issue to the user and ask first. ";
+    "Logout actions ('logout', 'oauth_logout') must NEVER be performed unless the user explicitly asks for it — never log out on your own, even if authentication looks broken, a verification fails, or you believe the session is invalid; surface the issue to the user and ask first. " +
+    "OAuth actions let you sign in to the Toolrator cloud (or any MCP server that fronts an OAuth 2.1 authorization server) with standard OAuth: the connector discovers the server's authorization metadata, runs the device or paste-back flow, stores the tokens locally, and attaches them automatically on every call. " +
+    "After a successful OAuth login the remote search-engine configuration is re-pulled with the new token and applied automatically — no restart needed.\n\n" +
+    "CHANGING SEARCH ENGINES: to change the search engines, use the https://toolrator.org/mcp MCP server " +
+    "(call it through the 'mcp_server' tool with target https://toolrator.org/mcp) and log in to your " +
+    "account first (manage_auth action 'start_oauth'). Then you or the user can change the search-engine " +
+    "configuration there (e.g. via its manage_search_engines tool), and it applies to this connector " +
+    "automatically — the connector picks the change up on the next status check or login.";
 
   if (state.authState === "authenticated") {
-    base += "Actions: 'status' to check your current state; 'logout' to securely clear credentials and return to anonymous mode. ";
-    base += `Logged in as ${state.email}.`;
+    base += " Actions: 'status' to check your current state; 'oauth_status' to list stored OAuth connections (tokens shown masked); 'logout' to securely clear credentials and return to anonymous mode; 'oauth_logout' to remove stored OAuth tokens.";
+    base += ` Logged in as ${state.email}.`;
     if (searchConfigState?.autoPullSucceeded === true) {
       base += " Session authenticated and active (verified at boot).";
     } else if (searchConfigState?.autoPullSucceeded === false && searchConfigState?.lastVerifiedAt) {
@@ -87,11 +98,11 @@ export function describeManageAuth(
     }
   } else if (state.authState === "device_flow_pending") {
     const minutes = getDeviceFlowRemainingMinutes(state);
-    base += "Actions: 'status' to check state; 'poll_device_flow' to manually check if the user completed login; 'start_device_flow' to restart the login process. ";
-    base += `Awaiting user to enter code ${state.userCode} at ${state.verificationUri}. Expires in ${minutes} minutes. The connector is polling automatically.`;
+    base += " Actions: 'status' to check state; 'poll_device_flow' to manually check if the user completed login; 'start_device_flow' to restart the login process; 'start_oauth' to begin the OAuth 2.1 login instead.";
+    base += ` Awaiting user to enter code ${state.userCode} at ${state.verificationUri}. Expires in ${minutes} minutes. The connector is polling automatically.`;
   } else {
-    base += "Actions: 'status' to check state; 'start_device_flow' to begin passwordless login (you'll receive a URL and code to give the user); 'poll_device_flow' to manually check if the user completed login. ";
-    base += "Not logged in. Start with action: 'start_device_flow' to authenticate.";
+    base += " Actions: 'status' to check state; 'start_oauth' to begin the OAuth 2.1 login against the Toolrator cloud (preferred — opens a URL for the user to approve, tokens are managed for you); 'start_device_flow' for the legacy API-key device flow; 'oauth_status' to inspect stored OAuth connections. " +
+      "Not logged in. Start with action: 'start_oauth' to authenticate.";
   }
 
   const sourceTag = searchConfigState?.source === "remote:toolpanel"

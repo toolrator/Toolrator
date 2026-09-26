@@ -8,11 +8,11 @@ import assert from "node:assert/strict";
 import { classifyUpstreamError } from "../src/errors.js";
 
 describe("classifyUpstreamError: auth_required", () => {
-  test("401 status → auth_required with device-flow required_step", () => {
+  test("401 status → auth_required with OAuth required_step", () => {
     const err = classifyUpstreamError(401, "");
     assert.equal(err.error_code, "auth_required");
     assert.equal(err.reason, "upstream_auth");
-    assert.match(err.required_step ?? "", /start_device_flow/);
+    assert.match(err.required_step ?? "", /start_oauth/);
   });
 
   test("JSON-RPC auth error code -32001 → auth_required", () => {

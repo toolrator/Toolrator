@@ -192,6 +192,38 @@ describe("verify-key", () => {
 });
 
 // ---------------------------------------------------------------------------
+// OAuth bearer compatibility — the connector may present an OAuth 2.1 access
+// token (opaque, issued by toolrator.org/mcp) where an API key used to go.
+// Open mode accepts ANY bearer; these tests lock that contract so a future
+// credential-type check cannot silently break OAuth-authenticated connectors.
+// ---------------------------------------------------------------------------
+
+describe("oauth bearer compatibility", () => {
+  // Shape of an opaque AS access token: prefix + ≥32 base64url chars.
+  const oauthShapedToken = `mockat_${"A".repeat(43)}`;
+
+  test("verify-key accepts an OAuth-shaped opaque bearer", async () => {
+    const res = await jsonReq("/api/auth/verify-key", {
+      method: "POST",
+      body: {},
+      headers: { Authorization: `Bearer ${oauthShapedToken}` },
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { valid: boolean };
+    assert.equal(body.valid, true);
+  });
+
+  test("config/auto accepts an OAuth-shaped opaque bearer", async () => {
+    const res = await jsonReq("/api/connector/config/auto", {
+      headers: { Authorization: `Bearer ${oauthShapedToken}` },
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { searchEngines: unknown[] };
+    assert.ok(Array.isArray(body.searchEngines));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Connector config — engines file CRUD + conditional auto-pull (Last-Modified/304).
 // ---------------------------------------------------------------------------
 

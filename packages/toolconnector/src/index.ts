@@ -79,7 +79,7 @@ async function main(): Promise<void> {
   // `start_device_flow` would hit `CONNECTOR_UPSTREAM_URL` even when toolpanel
   // is the live, locally-launched provider.
   const authClient = new AuthClient(resolvedDefaultBaseUrl, config.authUrl, logger);
-  const externalClient = new ExternalMcpClient(logger);
+  const externalClient = new ExternalMcpClient(logger, config.configDir);
 
   // Set API key on auth client if we're starting authenticated
   const initialState = stateManager.getState();
@@ -159,12 +159,15 @@ async function main(): Promise<void> {
   // so subsequent device-flow start / poll / verify-key calls track the same
   // upstream as the search-config pulls.
   let resolving = false;
-  async function reresolveSearchConfig(apiKey?: string): Promise<boolean> {
+  async function reresolveSearchConfig(
+    apiKey?: string,
+    opts?: { skipLogoutOn401?: boolean },
+  ): Promise<boolean> {
     if (resolving) return false;
     resolving = true;
     try {
       if (config.searchConfigMode !== "file" && apiKey) {
-        const remote = await pullRemoteConfig(apiKey, config, stateManager, logger);
+        const remote = await pullRemoteConfig(apiKey, config, stateManager, logger, opts);
         if (remote) {
           const configChanged = !isDeepStrictEqual(searchConfig, remote);
           currentEngines = await applySearchConfig(remote, registry, config, logger);
@@ -235,6 +238,12 @@ async function main(): Promise<void> {
     logger,
     searchConfigState,
     reresolveSearchConfig,
+    // OAuth login (manage_auth start_oauth/complete_oauth or device poll):
+    // re-pull the remote config with the fresh access token as the bearer —
+    // verify-key and config/auto accept OAuth tokens — so changes made at
+    // toolrator.org/mcp apply automatically. A 401 here means the token was
+    // rejected; it must NOT log the user out (the OAuth entry stays for retry).
+    (accessToken: string) => reresolveSearchConfig(accessToken, { skipLogoutOn401: true }),
   );
 
   // 6. Wire state changes to notifications/tools/list_changed
@@ -450,6 +459,7 @@ async function pullRemoteConfig(
   config: ToolconnectorConfig,
   stateManager: ConnectorStateManager,
   logger: Logger,
+  opts?: { skipLogoutOn401?: boolean },
 ): Promise<EffectiveSearchConfig | null> {
   // Decide which upstream to use.
   const decision = await pickRemoteBaseUrl(config, logger, apiKey);
@@ -475,7 +485,7 @@ async function pullRemoteConfig(
     }
 
     if (!verifyResult || !verifyResult.ok) {
-      if (verifyResult?.status === 401) {
+      if (verifyResult?.status === 401 && !opts?.skipLogoutOn401) {
         // API key invalid — clear stored credentials
         await stateManager.logout(config.configDir);
         logger.info(`Stored API key no longer valid against ${baseUrl} (${VERIFY_KEY_MAX_RETRIES + 1} consecutive 401s); logged out.`);

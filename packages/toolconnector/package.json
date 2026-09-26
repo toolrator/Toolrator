@@ -36,6 +36,7 @@
     "README.md",
     "LICENSE",
     "MCP-FEATURES.md",
+    "OAUTH.md",
     "search-engines.example.json"
   ],
   "scripts": {

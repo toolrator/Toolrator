@@ -84,11 +84,15 @@ The `toolconnector` exposes exactly **4 client-facing tools** to your AI agent:
 * **Returns**: The server's raw response envelope (with trust-level and prompt-injection warning).
 
 ### 3. `manage_auth`
-* **Purpose**: Manage passwordless device-flow authentication and check account status.
-* **Parameters**: 
-  * `action` (`"status" | "start_device_flow" | "poll_device_flow" | "logout"`, required): The auth action to perform. Dynamically scoped by state: `"status"` and `"logout"` when authenticated; `"status"`, `"start_device_flow"`, and `"poll_device_flow"` when anonymous (or while a device flow is pending).
-  * `device_code` (string, optional): Required for manual polling.
-* **Returns**: Login state, verification URL and user code, or confirmation status.
+* **Purpose**: Manage authentication — OAuth 2.1 login against the Toolrator cloud (or any MCP server that fronts an OAuth 2.1 authorization server), plus the legacy API-key device flow.
+* **Parameters**:
+  * `action` (required): The auth action to perform. Dynamically scoped by state: `"status"`, `"oauth_status"`, `"logout"`, `"oauth_logout"` when authenticated; `"status"`, `"start_oauth"`, `"complete_oauth"`, `"oauth_status"`, `"start_device_flow"`, `"poll_device_flow"` when anonymous (or while a flow is pending).
+  * `device_code` (string, optional): Required for `poll_device_flow`.
+  * `target` (string, optional): For `start_oauth` — the MCP server URL to authenticate against (default: the Toolrator cloud, `https://toolrator.org/mcp`).
+  * `scopes` (string[], optional): For `start_oauth` — OAuth scopes to request (defaults cover search-engine configuration).
+  * `redirect_url` (string, optional): Required for `complete_oauth` — the full post-approval redirect URL to paste back.
+* **Returns**: Login state, verification URL and user code (device flows), paste-back instructions, or stored-connection status (tokens masked).
+* **Auto-apply**: after a successful OAuth login the connector re-pulls the remote search-engine configuration with the new access token and applies it immediately — changes made at toolrator.org/mcp reach the connector without a restart.
 
 ### 4. `manage_favorites`
 * **Purpose**: Manage local MCP server bookmarks with cross-session custom memory notes.
@@ -131,7 +135,17 @@ sequenceDiagram
 
 ---
 
-The connector also uses `POST /api/auth/verify-key` (with retry/backoff) to validate stored API keys and `GET /api/connector/config/auto` to fetch the authoritative search-engine list — self-hosted upstreams must implement both. A stored API key that keeps failing verification (401 on all retries) logs the user out and clears stored credentials.
+The connector also uses `POST /api/auth/verify-key` (with retry/backoff) to validate stored credentials and `GET /api/connector/config/auto` to fetch the authoritative search-engine list — self-hosted upstreams must implement both; both endpoints accept an OAuth access token as the bearer in place of an API key. A stored credential that keeps failing verification (401 on all retries) logs the user out and clears stored credentials.
+
+## 🔏 OAuth 2.1
+
+The connector speaks full OAuth 2.1 — see [`OAUTH.md`](./OAUTH.md) for the grant-type explainer and what a remote/CLI client can and cannot do:
+
+- **`manage_auth action: "start_oauth"`** — discovers the authorization server via Protected Resource Metadata (RFC 9728), then runs the **device grant** (RFC 8628) when advertised (Toolrator cloud: open the URL, approve, done — the connector polls in the background) or **authorization-code + PKCE with paste-back** otherwise (the browser lands on a dead loopback page; the user copies the full redirect URL back). CSRF `state` is checked constant-time, `iss` (RFC 9207) is validated, and PKCE S256 is always enforced.
+- **Tokens live in `<configDir>/oauth-tokens.json`** (0600, atomic writes), keyed by authorization-server issuer with the target recorded; `credentials.json` and the PKCE verifier get the same treatment. No token material is ever logged or returned by tools (status output is masked).
+- **Automatic attachment**: `mcp_server` calls to a server with stored OAuth tokens get the bearer injected by the transport (and refreshed on 401) — no headers needed. Explicit `headers` still win and remain the last-resort escape hatch.
+- **Config auto-apply**: the access token doubles as the upstream credential for `verify-key` / `config/auto`, so a login at toolrator.org/mcp applies the remote engine configuration immediately.
+- Legacy API-key device flow (`start_device_flow`) keeps working unchanged for upstreams without an OAuth surface.
 
 ## ⚠️ Structured Error Architecture
 
@@ -141,7 +155,7 @@ When a tool execution against an upstream MCP server fails, `mcp_server` with `m
 {
   "error_code": "auth_required",
   "reason": "upstream_auth",
-  "required_step": "Call manage_auth with action: 'start_device_flow'",
+  "required_step": "Call manage_auth with action: 'start_oauth' (OAuth 2.1 login; 'start_device_flow' as legacy fallback)",
   "memory_note": "Free-text custom notes associated with your favorites bookmark"
 }
 ```

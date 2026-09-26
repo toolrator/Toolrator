@@ -1,6 +1,8 @@
 import type { Logger } from "./config.js";
 import { connectMcpClient } from "./mcp-connection.js";
 import { mcpCache } from "./cache.js";
+import { OAuthStore, maskToken } from "./oauth-store.js";
+import { buildSdkProvider } from "./oauth-client.js";
 import { z } from "zod";
 
 // ---------------------------------------------------------------------------
@@ -22,9 +24,31 @@ import { z } from "zod";
 
 export class ExternalMcpClient {
   private readonly logger: Logger;
+  private readonly oauthStore: OAuthStore | null;
 
-  constructor(logger: Logger) {
+  constructor(logger: Logger, configDir?: string) {
     this.logger = logger;
+    // OAuth store is optional: when no configDir is provided (tests), the
+    // OAuth path is inert and behavior matches pre-OAuth versions.
+    this.oauthStore = configDir ? new OAuthStore(configDir) : null;
+  }
+
+  /**
+   * Resolve connect options for a target: explicit headers win (they are used
+   * verbatim, no OAuth provider); otherwise attach the stored OAuth provider
+   * for the target when one exists so the transport injects + refreshes the
+   * bearer token transparently.
+   */
+  private async connectOpts(
+    url: string,
+    headers?: Record<string, string>,
+  ): Promise<{ headers?: Record<string, string>; authProvider?: unknown }> {
+    if (headers && Object.keys(headers).length > 0) return { headers };
+    if (!this.oauthStore) return {};
+    const entry = await this.oauthStore.findEntry(undefined, url);
+    if (!entry?.tokens?.access_token) return {};
+    this.logger.debug(`Using stored OAuth token for ${url} (${maskToken(entry.tokens.access_token)})`);
+    return { authProvider: buildSdkProvider({ store: this.oauthStore, logger: this.logger, target: url }) };
   }
 
   /** Execute a tool on an external MCP server (live). */
@@ -36,7 +60,7 @@ export class ExternalMcpClient {
     inputResponses?: Record<string, unknown>,
     headers?: Record<string, string>,
   ): Promise<unknown> {
-    const conn = await connectMcpClient(url, this.logger, { headers });
+    const conn = await connectMcpClient(url, this.logger, await this.connectOpts(url, headers));
     try {
       return await conn.client.request(
         {
@@ -63,7 +87,7 @@ export class ExternalMcpClient {
     params: Record<string, unknown>,
     headers?: Record<string, string>,
   ): Promise<unknown> {
-    const conn = await connectMcpClient(url, this.logger, { headers });
+    const conn = await connectMcpClient(url, this.logger, await this.connectOpts(url, headers));
     try {
       const clientAny = conn.client as any;
       if (typeof clientAny._requestWithSchemaViaCodec === "function") {
@@ -83,7 +107,7 @@ export class ExternalMcpClient {
     params: Record<string, unknown>,
     headers?: Record<string, string>,
   ): Promise<unknown> {
-    const conn = await connectMcpClient(url, this.logger, { headers });
+    const conn = await connectMcpClient(url, this.logger, await this.connectOpts(url, headers));
     try {
       const clientAny = conn.client as any;
       if (typeof clientAny._requestWithSchemaViaCodec === "function") {
@@ -98,7 +122,8 @@ export class ExternalMcpClient {
 
   /** List the tools advertised by an external MCP server. */
   async listTools(url: string, headers?: Record<string, string>): Promise<unknown> {
-    const headerSuffix = headers && Object.keys(headers).length > 0 ? `:${JSON.stringify(headers)}` : "";
+    const connectOpts = await this.connectOpts(url, headers);
+    const headerSuffix = connectOpts.headers && Object.keys(connectOpts.headers).length > 0 ? `:${JSON.stringify(connectOpts.headers)}` : "";
     const cacheKey = `tools:${url}${headerSuffix}`;
     const cached = mcpCache.get(cacheKey);
     if (cached) {
@@ -106,7 +131,7 @@ export class ExternalMcpClient {
       return cached;
     }
 
-    const conn = await connectMcpClient(url, this.logger, { headers });
+    const conn = await connectMcpClient(url, this.logger, connectOpts);
     try {
       const res = await conn.client.listTools();
       const ttlMs = (res as any).ttlMs;
@@ -121,7 +146,8 @@ export class ExternalMcpClient {
 
   /** List the resources exposed by an external MCP server. */
   async listResources(url: string, headers?: Record<string, string>): Promise<unknown> {
-    const headerSuffix = headers && Object.keys(headers).length > 0 ? `:${JSON.stringify(headers)}` : "";
+    const connectOpts = await this.connectOpts(url, headers);
+    const headerSuffix = connectOpts.headers && Object.keys(connectOpts.headers).length > 0 ? `:${JSON.stringify(connectOpts.headers)}` : "";
     const cacheKey = `resources:${url}${headerSuffix}`;
     const cached = mcpCache.get(cacheKey);
     if (cached) {
@@ -129,7 +155,7 @@ export class ExternalMcpClient {
       return cached;
     }
 
-    const conn = await connectMcpClient(url, this.logger, { headers });
+    const conn = await connectMcpClient(url, this.logger, connectOpts);
     try {
       const res = await conn.client.listResources();
       const ttlMs = (res as any).ttlMs;
@@ -144,7 +170,7 @@ export class ExternalMcpClient {
 
   /** Read the contents of a specific resource from an external MCP server. */
   async readResource(url: string, uri: string, headers?: Record<string, string>): Promise<unknown> {
-    const conn = await connectMcpClient(url, this.logger, { headers });
+    const conn = await connectMcpClient(url, this.logger, await this.connectOpts(url, headers));
     try {
       return await conn.client.readResource({ uri });
     } finally {
@@ -154,7 +180,8 @@ export class ExternalMcpClient {
 
   /** List the prompts exposed by an external MCP server. */
   async listPrompts(url: string, headers?: Record<string, string>): Promise<unknown> {
-    const headerSuffix = headers && Object.keys(headers).length > 0 ? `:${JSON.stringify(headers)}` : "";
+    const connectOpts = await this.connectOpts(url, headers);
+    const headerSuffix = connectOpts.headers && Object.keys(connectOpts.headers).length > 0 ? `:${JSON.stringify(connectOpts.headers)}` : "";
     const cacheKey = `prompts:${url}${headerSuffix}`;
     const cached = mcpCache.get(cacheKey);
     if (cached) {
@@ -162,7 +189,7 @@ export class ExternalMcpClient {
       return cached;
     }
 
-    const conn = await connectMcpClient(url, this.logger, { headers });
+    const conn = await connectMcpClient(url, this.logger, connectOpts);
     try {
       const res = await conn.client.listPrompts();
       const ttlMs = (res as any).ttlMs;
@@ -182,7 +209,7 @@ export class ExternalMcpClient {
     args?: Record<string, string>,
     headers?: Record<string, string>,
   ): Promise<unknown> {
-    const conn = await connectMcpClient(url, this.logger, { headers });
+    const conn = await connectMcpClient(url, this.logger, await this.connectOpts(url, headers));
     try {
       return await conn.client.getPrompt({ name, arguments: args });
     } finally {

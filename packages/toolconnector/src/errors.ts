@@ -54,7 +54,7 @@ export function classifyUpstreamError(
   ) {
     return createStructuredError("auth_required", {
       reason: "upstream_auth",
-      required_step: "Call manage_auth with action: 'start_device_flow'",
+      required_step: "Call manage_auth with action: 'start_oauth' (OAuth 2.1 login; 'start_device_flow' as legacy fallback)",
       memory_note: context?.memory_note,
     });
   }

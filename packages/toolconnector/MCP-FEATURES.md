@@ -104,11 +104,22 @@ This document tracks every MCP 2026-07-28 protocol feature and whether it is imp
 
 ## 8. Authorization
 
+Toolconnector is an OAuth 2.1 **client** (see [`OAUTH.md`](./OAUTH.md) for the
+grant-type explainer). Legacy API-key auth (device flow → `verify-key`) still
+works unchanged; OAuth tokens are also accepted by upstreams that front
+`verify-key` / `config/auto`.
+
 | # | Feature | Spec Ref | Status | Location | Notes |
 |---|---------|----------|--------|----------|-------|
-| 8.1 | Validate `iss` parameter on auth responses (RFC 9207) | SEP-2468 | ➖ | — | Toolconnector uses API key auth, not OAuth. |
-| 8.2 | `application_type` during Dynamic Client Registration | SEP-837 | ➖ | — | Not using DCR. |
-| 8.3 | Credential binding to issuing AS | SEP-2352 | ➖ | — | Not applicable. |
+| 8.1 | Validate `iss` parameter on auth responses (RFC 9207) | SEP-2468 | ✅ | `oauth-client.ts` | `completePasteBack` rejects `iss` mismatches (mix-up defense); absent `iss` tolerated for legacy ASs. |
+| 8.2 | `application_type` during Dynamic Client Registration | SEP-837 | ➖ | — | Not using DCR — client identity comes from CIMD (Client ID Metadata Documents). |
+| 8.3 | Credential binding to issuing AS | SEP-2352 | ✅ | `oauth-store.ts` | Entries keyed by issuer; `tokens(ctx)` returns matching-issuer tokens, most-recent otherwise. |
+| 8.4 | Protected Resource Metadata discovery (RFC 9728) | — | ✅ | `oauth-client.ts` | `discoverAsForTarget` probes path-inserted + origin PRM, then AS metadata. |
+| 8.5 | Authorization code + PKCE (S256 mandatory) | OAuth 2.1 | ✅ | `oauth-client.ts` | Paste-back redirect (no loopback listener); verifier persisted 0600 before the browser hop. |
+| 8.6 | Device authorization grant (RFC 8628) | — | ✅ | `oauth-client.ts` | Preferred when the AS advertises `device_authorization_endpoint`; poll interval honored, `slow_down` handled. |
+| 8.7 | Refresh token rotation + reuse detection | OAuth BCP | ✅ | `oauth-client.ts` | Server-side rotation; a rejected refresh drops the entry and requires a fresh login. |
+| 8.8 | Client ID Metadata Documents (CIMD) | — | ✅ | `oauth-store.ts` | `client_id` = `https://toolrator.org/.well-known/oauth-client/toolconnector.json`; no client secrets stored. |
+| 8.9 | Resource indicator binding (RFC 8707) | — | ✅ | `oauth-client.ts` | `resource` from PRM forwarded on device authorize + token requests. |
 
 ---
 

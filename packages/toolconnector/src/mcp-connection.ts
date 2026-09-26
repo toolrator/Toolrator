@@ -20,6 +20,15 @@ export interface McpConnectOptions {
   /** Extra headers attached to every outbound request (e.g. Authorization). */
   headers?: Record<string, string>;
   /**
+   * OAuth provider (SDK OAuthClientProvider shape) attached to both
+   * transports. When present, the transport injects the bearer token on every
+   * request and runs the SDK's auth() flow on 401 (silent refresh). Only set
+   * when the caller did NOT supply explicit Authorization headers — explicit
+   * caller headers always win.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  authProvider?: any;
+  /**
    * Called with the response headers of every HTTP response. Used to capture
    * side-channel headers without coupling the caller to the transport internals.
    */
@@ -76,6 +85,11 @@ export async function connectMcpClient(
     : undefined;
 
   const requestInit = opts.headers ? { headers: opts.headers } : undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const authProviderOpt = opts.authProvider
+    ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { authProvider: opts.authProvider as any }
+    : {};
 
   // Attempt 1 — modern Streamable HTTP transport.
   try {
@@ -88,6 +102,7 @@ export async function connectMcpClient(
     });
     const transport = new StreamableHTTPClientTransport(parsed, {
       requestInit,
+      ...authProviderOpt,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       fetch: fetchImpl as any,
     });
@@ -118,6 +133,7 @@ export async function connectMcpClient(
       });
       const transport = new SSEClientTransport(parsed, {
         requestInit,
+        ...authProviderOpt,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         fetch: fetchImpl as any,
       });

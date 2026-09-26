@@ -4,6 +4,8 @@ import type { Logger } from "./config.js";
 import { type ConnectorStateManager, schemaTimestamps } from "./state.js";
 import type { AuthClient } from "./auth-client.js";
 import type { ExternalMcpClient } from "./external-client.js";
+import { OAuthStore, maskToken } from "./oauth-store.js";
+import { OAuthClient } from "./oauth-client.js";
 import {
   describeSearchMcpEcosystem,
   describeMcpServer,
@@ -37,6 +39,17 @@ const POLL_FAST_INTERVAL_MS = 10_000;
 const POLL_FAST_WINDOW_MS = 60_000;
 const POLL_SLOW_INTERVAL_MS = 60_000;
 
+// Default OAuth scopes for a Toolrator cloud login: enough to read the
+// profile, pull the search-engine + server configuration the connector
+// applies locally, and write engine config changes made at toolrator.org/mcp.
+const DEFAULT_OAUTH_SCOPES = [
+  "profile:read",
+  "engines:read",
+  "engines:write",
+  "servers:read",
+  "searchconfigs:write",
+];
+
 function checkSchemaWarning(resultText: string): string {
   if (schemaTimestamps.lastUpdated > schemaTimestamps.lastFetched) {
     return resultText + "\n\n⚠️ SERVER WARNING: The server's available tools/schemas have changed recently, but your client application has not yet fetched the new definitions. You are likely viewing an outdated tools list. Please ask the user or the system to refresh the tools.";
@@ -61,6 +74,7 @@ export function registerAllTools(
     source?: string;
   },
   onRefreshSearchConfig?: (apiKey?: string) => Promise<boolean>,
+  onOAuthLogin?: (accessToken: string) => Promise<boolean>,
 ): { updateSearchTool: () => void } {
   // Intercept tool registration: append the schema-staleness one-liner to ALL
   // tool text outputs (the transport layer in index.ts strips it and attaches
@@ -240,6 +254,41 @@ export function registerAllTools(
 
   let activePoller: NodeJS.Timeout | null = null;
 
+  // OAuth 2.1 client for the Toolrator cloud (and any MCP server that fronts
+  // an authorization server). The store keeps tokens in the config dir (0600);
+  // nothing here logs token material.
+  const oauthStore = new OAuthStore(configDir);
+  const oauthClient = new OAuthClient(oauthStore, logger);
+
+  /**
+   * After a successful OAuth login: hand the access token to the wiring hook
+   * so the remote search-engine config is re-pulled with it (verify-key and
+   * config/auto accept OAuth bearer tokens) and applies automatically — then
+   * refresh this tool's own schema since the action enum is auth-state-aware.
+   */
+  const applyPostLogin = async (accessToken: string, label: string): Promise<string> => {
+    const parts: string[] = [`OAuth login complete (${label}).`];
+    try {
+      if (onOAuthLogin) {
+        const applied = await onOAuthLogin(accessToken);
+        parts.push(
+          applied
+            ? "Remote search-engine configuration was re-pulled with the new token and applied automatically."
+            : "Remote configuration could not be re-pulled with the new token (local fallback stays active).",
+        );
+      }
+    } catch (err) {
+      logger.warn(`Post-OAuth config apply failed: ${String(err)}`);
+      parts.push("Remote configuration could not be re-pulled with the new token (local fallback stays active).");
+    }
+    try {
+      authTool.update({ description: describeManageAuth(stateManager.getState(), searchConfigState) });
+    } catch {
+      /* description refresh is cosmetic */
+    }
+    return parts.join(" ");
+  };
+
   // Activated authentication management feature
   const authTool = server.registerTool(
     "manage_auth",
@@ -247,14 +296,20 @@ export function registerAllTools(
       description: describeManageAuth(stateManager.getState(), searchConfigState),
       inputSchema: z.object({
         action: (stateManager.getState().authState === "authenticated"
-          ? z.enum(["status", "logout"])
-          : z.enum(["status", "start_device_flow", "poll_device_flow"])
+          ? z.enum(["status", "logout", "oauth_status", "oauth_logout"])
+          : z.enum(["status", "start_device_flow", "poll_device_flow", "start_oauth", "complete_oauth", "oauth_status"])
         ).describe("The auth action to perform"),
         device_code: z.string().optional()
           .describe("Required for 'poll_device_flow' — the device code from start_device_flow"),
+        target: z.string().optional()
+          .describe("For 'start_oauth': the MCP server URL to authenticate against. Default: the Toolrator cloud"),
+        scopes: z.array(z.string()).optional()
+          .describe("For 'start_oauth': OAuth scopes to request. Default covers Toolrator search engines"),
+        redirect_url: z.string().optional()
+          .describe("Required for 'complete_oauth' — the full post-approval redirect URL to paste back"),
       })
     },
-    async ({ action, device_code }) => {
+    async ({ action, device_code, target, scopes, redirect_url }) => {
             const currentState = stateManager.getState();
 
             if (action === "status") {
@@ -294,6 +349,161 @@ export function registerAllTools(
               return {
                 content: [{ type: "text" as const, text: JSON.stringify(safeState, null, 2) }],
               };
+            }
+
+            if (action === "oauth_status") {
+              try {
+                const entries = await oauthStore.allEntries();
+                const pending = await oauthStore.getPendingGrant();
+                const result = {
+                  oauth_connections: entries.map((e) => ({
+                    issuer: e.issuer,
+                    target: e.target,
+                    // Masked — token material never leaves the config dir.
+                    access_token: e.tokens?.access_token ? maskToken(e.tokens.access_token) : undefined,
+                    has_refresh_token: Boolean(e.tokens?.refresh_token),
+                    expires_at: e.expiresAt ? new Date(e.expiresAt).toISOString() : undefined,
+                    scope: e.tokens?.scope,
+                    saved_at: e.savedAt,
+                  })),
+                  pending_flow: pending
+                    ? { target: pending.target, kind: pending.deviceCode ? "device" : "paste_back", started_at: new Date(pending.createdAt).toISOString() }
+                    : null,
+                };
+                return {
+                  content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+                };
+              } catch (err) {
+                return {
+                  content: [{ type: "text" as const, text: `OAuth status error: ${String(err)}` }],
+                  isError: true,
+                };
+              }
+            }
+
+            if (action === "oauth_logout") {
+              try {
+                const entries = await oauthStore.allEntries();
+                if (entries.length === 0) {
+                  return {
+                    content: [{ type: "text" as const, text: "No OAuth connections to remove." }],
+                  };
+                }
+                let removed = 0;
+                for (const e of entries) {
+                  if (await oauthClient.revoke(e.issuer, e.target)) removed++;
+                }
+                await oauthStore.clearPendingGrant();
+                return {
+                  content: [{ type: "text" as const, text: `Removed ${removed} OAuth connection(s). Tokens were deleted locally; re-run 'start_oauth' to log in again.` }],
+                };
+              } catch (err) {
+                return {
+                  content: [{ type: "text" as const, text: `OAuth logout error: ${String(err)}` }],
+                  isError: true,
+                };
+              }
+            }
+
+            if (action === "start_oauth") {
+              const oauthTarget = target || "https://toolrator.org/mcp";
+              try {
+                const flow = await oauthClient.startLogin(
+                  oauthTarget,
+                  scopes && scopes.length > 0 ? scopes : DEFAULT_OAUTH_SCOPES,
+                );
+
+                if (flow.kind === "device") {
+                  // RFC 8628 background polling (same pattern as the legacy
+                  // device flow above): fast while the user is actively
+                  // confirming, then slow; stops on success/expiry/denial.
+                  const flowStart = Date.now();
+                  const pollDeadline = flowStart + 15 * 60 * 1000;
+                  // Honor the AS's RFC 8628 §3.2 interval when advertised,
+                  // floor 1s, never above the slow cadence.
+                  const oauthPollIntervalMs = Math.max(
+                    1_000,
+                    Math.min((flow.interval ?? 5) * 1_000, POLL_SLOW_INTERVAL_MS),
+                  );
+                  if (activePoller) clearTimeout(activePoller);
+                  const scheduleNextOauthPoll = (delayMs: number) => {
+                    activePoller = setTimeout(async () => {
+                      if (Date.now() > pollDeadline) {
+                        activePoller = null;
+                        await oauthStore.clearPendingGrant();
+                        return;
+                      }
+                      try {
+                        const poll = await oauthClient.pollDeviceGrantOnce();
+                        if (poll && poll !== "pending") {
+                          activePoller = null;
+                          if (poll.tokens?.access_token) {
+                            await applyPostLogin(poll.tokens.access_token, poll.issuer);
+                          }
+                          return;
+                        }
+                      } catch (err: any) {
+                        // access_denied / expired_token throw with a kind —
+                        // the pending grant is already cleared by the client.
+                        activePoller = null;
+                        logger.info(`OAuth device flow ended: ${err?.message ?? String(err)}`);
+                        return;
+                      }
+                      const next = Date.now() - flowStart < POLL_FAST_WINDOW_MS
+                        ? Math.min(oauthPollIntervalMs, POLL_FAST_INTERVAL_MS)
+                        : oauthPollIntervalMs;
+                      scheduleNextOauthPoll(next);
+                    }, delayMs);
+                  };
+                  scheduleNextOauthPoll(oauthPollIntervalMs);
+
+                  return {
+                    content: [{
+                      type: "text" as const,
+                      text: `${flow.instructions}\n\nThe connector polls in the background and finishes automatically; no further action is needed from you.`,
+                    }],
+                  };
+                }
+
+                return {
+                  content: [{
+                    type: "text" as const,
+                    text: `${flow.instructions}\n\nWhen the user gives you the redirect URL, call this tool again with action: 'complete_oauth' and redirect_url set to it.`,
+                  }],
+                };
+              } catch (err) {
+                return {
+                  content: [{
+                    type: "text" as const,
+                    text: `Failed to start OAuth login for ${oauthTarget}: ${String(err)}`,
+                  }],
+                  isError: true,
+                };
+              }
+            }
+
+            if (action === "complete_oauth") {
+              if (!redirect_url) {
+                return {
+                  content: [{ type: "text" as const, text: "redirect_url is required for complete_oauth — paste the FULL post-approval redirect URL from the browser address bar." }],
+                  isError: true,
+                };
+              }
+              try {
+                const entry = await oauthClient.completePasteBack(redirect_url);
+                if (!entry.tokens?.access_token) {
+                  throw new Error("token response carried no access_token");
+                }
+                const text = await applyPostLogin(entry.tokens.access_token, entry.issuer);
+                return {
+                  content: [{ type: "text" as const, text }],
+                };
+              } catch (err) {
+                return {
+                  content: [{ type: "text" as const, text: `OAuth completion failed: ${String(err)}` }],
+                  isError: true,
+                };
+              }
             }
 
             if (action === "logout") {
@@ -498,12 +708,18 @@ export function registerAllTools(
     searchTool.update({ description: describeSearchMcpEcosystem(currentState, registry) });
     mcpServerTool.update({ description: describeMcpServer(currentState) });
     const authActionEnum = currentState.authState === "authenticated"
-      ? z.enum(["status", "logout"])
-      : z.enum(["status", "start_device_flow", "poll_device_flow"]);
+      ? z.enum(["status", "logout", "oauth_status", "oauth_logout"])
+      : z.enum(["status", "start_device_flow", "poll_device_flow", "start_oauth", "complete_oauth", "oauth_status"]);
 
     const newSchema = z.object({
       action: authActionEnum.describe("The auth action to perform"),
       device_code: z.string().optional().describe("Required for 'poll_device_flow'"),
+      target: z.string().optional()
+        .describe("For 'start_oauth': the MCP server URL to authenticate against. Default: the Toolrator cloud"),
+      scopes: z.array(z.string()).optional()
+        .describe("For 'start_oauth': OAuth scopes to request. Default covers Toolrator search engines"),
+      redirect_url: z.string().optional()
+        .describe("Required for 'complete_oauth' — the full post-approval redirect URL to paste back"),
     });
 
     // @ts-ignore - Ignore if inputSchema update is not explicitly typed

@@ -202,7 +202,9 @@ export class ConnectorStateManager {
         saved_at: new Date().toISOString(),
       };
       const filePath = join(configDir, CREDENTIAL_FILENAME);
-      await writeFile(filePath, JSON.stringify(payload, null, 2), "utf-8");
+      // 0600: parity with oauth-tokens.json (OAuthStore.writeJson0600) —
+      // secrets never world/group-readable where the OS honors the bit.
+      await writeFile(filePath, JSON.stringify(payload, null, 2), { encoding: "utf-8", mode: 0o600 });
       this.logger.debug(`Credentials saved to ${filePath}`);
     } catch (err) {
       this.logger.warn(`Failed to save credentials: ${String(err)}`);
