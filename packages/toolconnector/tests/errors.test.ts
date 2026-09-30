@@ -96,13 +96,6 @@ describe("classifyUpstreamError: catch-all + context", () => {
     assert.ok(err.reason);
   });
 
-  test("context.memory_note is threaded through every branch", () => {
-    const a = classifyUpstreamError(401, "", { memory_note: "note-1" });
-    assert.equal(a.memory_note, "note-1");
-    const b = classifyUpstreamError(500, "x", { memory_note: "note-2" });
-    assert.equal(b.memory_note, "note-2");
-  });
-
   test("context.code is used when the body has no JSON-RPC code", () => {
     const err = classifyUpstreamError(400, "plain text", { code: -32022 });
     assert.equal(err.error_code, "unsupported_protocol_version");

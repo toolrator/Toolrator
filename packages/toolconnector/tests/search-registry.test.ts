@@ -1,7 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert";
-import { SearchRegistry } from "../src/search-registry.js";
-import type { SearchEngine } from "../src/search-engine.js";
+import { SearchRegistry } from "../src/search-engines.js";
+import type { SearchEngine } from "../src/search-engines.js";
 import type { EngineSchema } from "../src/schema-cache.js";
 
 class MockSearchEngine implements SearchEngine {

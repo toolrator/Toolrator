@@ -64,7 +64,7 @@ export interface PendingGrant {
   codeVerifier?: string;
   /** Present for RFC 8628 device flows. */
   deviceCode?: string;
-  /** Present for RFC 8628 device flows: the short code the user enters. */
+  /** Human-approved code the user must enter at the verification URI (device flows). */
   userCode?: string;
   /** epoch ms */
   createdAt: number;
@@ -228,7 +228,7 @@ export class OAuthStore {
     const entry: OAuthEntry = {
       issuer,
       target: pending.target,
-      clientId: pending.deviceCode ? TOOLCONNECTOR_CLIENT_ID : TOOLCONNECTOR_CLIENT_ID,
+      clientId: TOOLCONNECTOR_CLIENT_ID,
       clientInformation: { client_id: TOOLCONNECTOR_CLIENT_ID },
       tokens,
       expiresAt: tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : undefined,

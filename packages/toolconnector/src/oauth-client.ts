@@ -33,8 +33,6 @@ import {
 // the loopback-listener UX) is why no listener is bound.
 
 const DISCOVERY_TIMEOUT_MS = 8000;
-const DEVICE_POLL_INTERVAL_MS = 5000;
-const DEVICE_MAX_WAIT_MS = 15 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // AS metadata discovery
@@ -232,8 +230,6 @@ export class OAuthClient {
         state: "",
         issuer: as.issuer,
         deviceCode: flow.device_code,
-        // Remembered so status output / tests can surface what the user
-        // must type at the verification URL.
         userCode: flow.user_code,
         createdAt: Date.now(),
         expiresAt: Date.now() + (flow.expires_in ?? 900) * 1000,
@@ -242,7 +238,8 @@ export class OAuthClient {
       const lines = [
         `Open this URL in a browser and approve the sign-in:`,
         `  ${flow.verification_uri_complete || flow.verification_uri}`,
-        flow.verification_uri_complete ? "" : `  Code: ${flow.user_code}`,
+        ``,
+        `If the page asks for a code, enter: ${flow.user_code}`,
         ``,
         `The connector polls in the background and finishes automatically.`,
       ];
@@ -356,9 +353,10 @@ export class OAuthClient {
 
   /**
    * Poll a pending device grant once. Returns the entry on success, null
-   * while still pending, and throws on expiry/slow-down exhaustion.
+   * when there is no pending device grant, and distinguishes `slow_down` so
+   * the caller can increase its interval as RFC 8628 §3.5 requires.
    */
-  async pollDeviceGrantOnce(): Promise<OAuthEntry | "pending" | null> {
+  async pollDeviceGrantOnce(): Promise<OAuthEntry | "pending" | "slow_down" | null> {
     const pending = await this.store.getPendingGrant();
     if (!pending?.deviceCode) return null;
     const discovered = await discoverAsForTarget(pending.target, this.logger);
@@ -387,7 +385,7 @@ export class OAuthClient {
     }
     const errCode = String(body.error ?? "");
     if (errCode === "authorization_pending") return "pending";
-    if (errCode === "slow_down") return "pending";
+    if (errCode === "slow_down") return "slow_down";
     if (errCode === "expired_token" || errCode === "access_denied") {
       await this.store.clearPendingGrant();
       throw new OAuthFlowError(errCode, `Device flow ended: ${errCode}`);
@@ -502,7 +500,7 @@ export async function fetchWithTimeout(
 }
 
 // ---------------------------------------------------------------------------
-// SDK adapter (OAuthClientProvider shape) — used by mcp-connection.ts
+// SDK adapter (OAuthClientProvider shape) — used by mcp-client.ts
 // ---------------------------------------------------------------------------
 
 export interface ProviderDeps {

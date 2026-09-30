@@ -120,11 +120,11 @@ describe("device grant", () => {
     assert.equal(await client.pollDeviceGrantOnce(), null);
   });
 
-  test("RFC 8628 §3.5: polling faster than the interval surfaces slow_down as pending", async () => {
+  test("RFC 8628 §3.5: slow_down is surfaced distinctly so polling can back off", async () => {
     // Enforcement ON with a 60s interval — deterministic on any machine: the
     // first poll arms the limiter, the approve + rushed poll follow well
-    // inside the window, so the AS MUST answer slow_down (surfaced as
-    // "pending", not an error).
+    // inside the window, so the AS answers slow_down. The caller needs this
+    // distinct result to add the required 5 seconds to subsequent intervals.
     as.setDevicePollInterval(60_000);
     try {
       const start = await client.startLogin(TARGET_URL, OAUTH_SCOPES);
@@ -132,7 +132,7 @@ describe("device grant", () => {
       assert.equal(await client.pollDeviceGrantOnce(), "pending");
       as.approveDeviceGrant("MOCK-CODE");
       const rushed = await client.pollDeviceGrantOnce();
-      assert.equal(rushed, "pending");
+      assert.equal(rushed, "slow_down");
     } finally {
       as.setDevicePollInterval(0);
       await store.clearPendingGrant();
@@ -298,7 +298,7 @@ describe("refresh", () => {
     // Seed a fresh login (device flow is the fastest path).
     await client.startLogin(TARGET_URL, OAUTH_SCOPES);
     as.approveDeviceGrant("MOCK-CODE");
-    const first = (await client.pollDeviceGrantOnce()) as Exclude<Awaited<ReturnType<typeof client.pollDeviceGrantOnce>>, "pending" | null>;
+    const first = (await client.pollDeviceGrantOnce()) as Exclude<Awaited<ReturnType<typeof client.pollDeviceGrantOnce>>, "pending" | "slow_down" | null>;
     assert.ok(first.tokens?.access_token);
     const firstAccess = first.tokens!.access_token;
     const firstRefresh = first.tokens!.refresh_token!;

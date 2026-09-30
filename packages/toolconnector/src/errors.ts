@@ -2,7 +2,6 @@ export interface StructuredError {
   error_code: string;
   reason?: string;
   required_step?: string;
-  memory_note?: string;
 }
 
 export function createStructuredError(
@@ -33,7 +32,7 @@ export function formatErrorResponse(error: StructuredError): {
 export function classifyUpstreamError(
   statusCode: number,
   body: string,
-  context?: { target?: string; memory_note?: string; code?: number }
+  context?: { target?: string; code?: number }
 ): StructuredError {
   let parsedBody: any = null;
   try {
@@ -54,8 +53,7 @@ export function classifyUpstreamError(
   ) {
     return createStructuredError("auth_required", {
       reason: "upstream_auth",
-      required_step: "Call manage_auth with action: 'start_oauth' (OAuth 2.1 login; 'start_device_flow' as legacy fallback)",
-      memory_note: context?.memory_note,
+      required_step: "Call manage_auth with action: 'start_oauth' (OAuth 2.1 login)",
     });
   }
 
@@ -64,13 +62,11 @@ export function classifyUpstreamError(
       return createStructuredError("tool_not_found", {
         reason: "tool_not_found",
         required_step: "Call mcp_server with method: 'tools/list' to list available tools",
-        memory_note: context?.memory_note,
       });
     }
     return createStructuredError("server_not_found", {
       reason: "server_not_found",
       required_step: "Search for a registered server using search_mcp_ecosystem",
-      memory_note: context?.memory_note,
     });
   }
 
@@ -78,7 +74,6 @@ export function classifyUpstreamError(
     return createStructuredError("tool_not_found", {
       reason: "tool_not_found",
       required_step: "Call mcp_server with method: 'tools/list' to list available tools",
-      memory_note: context?.memory_note,
     });
   }
 
@@ -86,7 +81,6 @@ export function classifyUpstreamError(
     return createStructuredError("resource_not_found", {
       reason: "resource_not_found",
       required_step: "Call mcp_server with method: 'resources/list' to list available resources",
-      memory_note: context?.memory_note,
     });
   }
 
@@ -94,7 +88,6 @@ export function classifyUpstreamError(
     return createStructuredError("unsupported_protocol_version", {
       reason: "unsupported_protocol_version",
       required_step: "The MCP server uses an unsupported protocol version. Please upgrade toolconnector or contact support.",
-      memory_note: context?.memory_note,
     });
   }
 
@@ -102,12 +95,10 @@ export function classifyUpstreamError(
     return createStructuredError("header_mismatch", {
       reason: "header_mismatch",
       required_step: "The HTTP headers did not match the request payload.",
-      memory_note: context?.memory_note,
     });
   }
 
   return createStructuredError("execution_failed", {
     reason: rawMessage || "upstream error",
-    memory_note: context?.memory_note,
   });
 }

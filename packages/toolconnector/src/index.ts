@@ -15,8 +15,7 @@ import {
   buildStaleErrorAppendix,
   buildStaleSuccessNotice,
 } from "./stale-schema.js";
-import { AuthClient } from "./auth-client.js";
-import { ExternalMcpClient } from "./external-client.js";
+import { ExternalMcpClient } from "./mcp-client.js";
 import { registerAllTools } from "./tools.js";
 import {
   loadSearchConfig,
@@ -24,17 +23,17 @@ import {
   type EffectiveSearchConfig,
   type SearchEngineConfig,
 } from "./search-config.js";
-import { createSearchEngine } from "./search-engine.js";
-import { SearchRegistry } from "./search-registry.js";
+import { createSearchEngine } from "./search-engines.js";
+import { SearchRegistry } from "./search-engines.js";
+import { OAuthStore } from "./oauth-store.js";
 import {
   DEFAULT_SCHEMA,
   fetchAndCacheSchema,
   startSchemaRefreshLoop,
 } from "./schema-cache.js";
-import { stat, writeFile } from "node:fs/promises";
+import { stat, writeFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { withDeadline } from "./deadline.js";
 
 /**
  * Hard budget for boot-time remote resolution (toolpanel probe + verify-key
@@ -59,33 +58,29 @@ async function main(): Promise<void> {
   const stateManager = new ConnectorStateManager(logger);
   await stateManager.init(config.configDir, config.apiKey);
 
+  // One-shot migration: `manage_favorites` and its `favorites.json` store were
+  // removed, so a config dir written by an older install now holds a file
+  // nothing reads. Drop it once at boot rather than leaving it behind forever.
+  await removeLegacyFavoritesFile(config.configDir, logger);
+
   const registry = new SearchRegistry();
   const bootDeadline = Date.now() + BOOT_REMOTE_DEADLINE_MS;
   // Compute the resolved default base URL up front so the implicit default
   // engine in `loadSearchConfig` (used when no engines come from any source)
   // points at the same upstream that the rest of the connector will use.
-  // Also feeds the AuthClient's pinned upstream so that device-flow start /
-  // poll / verify-key all go to toolpanel when it's alive.
   // Falls back to the configured authUrl when nothing is reachable.
   const initialDecision = await withDeadline(
-    pickRemoteBaseUrl(config, logger, ""),
+    pickRemoteBaseUrl(config, logger),
     bootDeadline,
   );
   const resolvedDefaultBaseUrl = initialDecision?.baseUrl ?? config.authUrl;
 
-  // 3. Create HTTP clients — AuthClient is pinned to the resolved URL so the
-  // user-facing auth flow (device start / poll / verify-key) targets the
-  // same upstream as the search-config pulls. Without this, calling
-  // `start_device_flow` would hit `CONNECTOR_UPSTREAM_URL` even when toolpanel
-  // is the live, locally-launched provider.
-  const authClient = new AuthClient(resolvedDefaultBaseUrl, config.authUrl, logger);
+  // 3. Create the external MCP client — the only long-lived client object the
+  // connector owns. Auth and search-config traffic uses bare `fetch` against
+  // the resolved upstream (see `pullRemoteConfig`).
   const externalClient = new ExternalMcpClient(logger, config.configDir);
 
-  // Set API key on auth client if we're starting authenticated
   const initialState = stateManager.getState();
-  if (initialState.apiKey) {
-    authClient.setApiKey(initialState.apiKey);
-  }
 
   //
   // Precedence:
@@ -119,9 +114,23 @@ async function main(): Promise<void> {
   // background pull still completes and warms the persisted config cache; the
   // next auth-state change (login/logout) re-resolves from it. No client-visible
   // startup hang either way.
-  if (config.searchConfigMode !== "file" && initialState.apiKey) {
+  //
+  // Unified credentials: the pull runs with whichever domain is present — the
+  // API key, or a stored OAuth access token (OAuth-only sessions previously
+  // got no boot pull at all and only picked up their account config on the
+  // first manual 'status' call).
+  let bootCredential: string | undefined = initialState.apiKey;
+  if (!bootCredential) {
+    try {
+      const oauthEntries = await new OAuthStore(config.configDir).allEntries();
+      bootCredential = oauthEntries.find((e) => e.tokens?.access_token)?.tokens?.access_token;
+    } catch {
+      // No OAuth store — stay unauthenticated for the boot pull.
+    }
+  }
+  if (config.searchConfigMode !== "file" && bootCredential) {
     const remote = await withDeadline(
-      pullRemoteConfig(initialState.apiKey, config, stateManager, logger),
+      pullRemoteConfig(bootCredential, config, stateManager, logger),
       bootDeadline,
     );
     if (remote) {
@@ -131,9 +140,6 @@ async function main(): Promise<void> {
       searchConfigState.source = remote.source;
       searchConfigState.resolvedBaseUrl =
         remote.source === "remote:toolpanel" ? config.toolpanelUrl : config.authUrl;
-      // Repin the auth client to the resolved upstream so device flow traffic
-      // (start, poll, verify-key) targets the same backend.
-      authClient.setUpstream(searchConfigState.resolvedBaseUrl);
     }
     // else: keep the local-file fallback already applied above
   }
@@ -155,9 +161,7 @@ async function main(): Promise<void> {
 
   // Re-resolve the search config whenever the auth state changes:
   // authenticated → always pull from the resolved upstream; otherwise fall back
-  // to the local file. The auth client is repinned to the same resolved URL
-  // so subsequent device-flow start / poll / verify-key calls track the same
-  // upstream as the search-config pulls.
+  // to the local file.
   let resolving = false;
   async function reresolveSearchConfig(
     apiKey?: string,
@@ -176,9 +180,6 @@ async function main(): Promise<void> {
           searchConfigState.source = remote.source;
           searchConfigState.resolvedBaseUrl =
             remote.source === "remote:toolpanel" ? config.toolpanelUrl : config.authUrl;
-          // Repin the auth client to the same upstream so device flow stays
-          // consistent with the search-config traffic.
-          authClient.setUpstream(searchConfigState.resolvedBaseUrl);
 
           if (configChanged) {
             updateSearchTool?.();
@@ -192,7 +193,7 @@ async function main(): Promise<void> {
       // Unauthenticated, or remote fetch failed → local file fallback.
       // Use a freshly-probed base URL so the implicit default engine and the
       // auth client both track the current toolpanel reachability.
-      const decision = await pickRemoteBaseUrl(config, logger, "");
+      const decision = await pickRemoteBaseUrl(config, logger);
       const fallbackBaseUrl = decision?.baseUrl ?? config.authUrl;
       const local = loadSearchConfig(process.env, config.configDir, fallbackBaseUrl);
       const configChanged = !isDeepStrictEqual(searchConfig, local);
@@ -200,8 +201,7 @@ async function main(): Promise<void> {
       searchConfig = local;
       searchConfigState.autoPullSucceeded = false;
       searchConfigState.resolvedBaseUrl = fallbackBaseUrl;
-      authClient.setUpstream(fallbackBaseUrl);
-      
+
       if (configChanged) {
         updateSearchTool?.();
         server.sendToolListChanged();
@@ -232,14 +232,13 @@ async function main(): Promise<void> {
     server,
     stateManager,
     registry,
-    authClient,
     externalClient,
     config.configDir,
     logger,
     searchConfigState,
     reresolveSearchConfig,
-    // OAuth login (manage_auth start_oauth/complete_oauth or device poll):
-    // re-pull the remote config with the fresh access token as the bearer —
+    // OAuth login (manage_auth start_oauth, or its background RFC 8628 poll
+    // completing on its own): re-pull the remote config with the fresh access token as the bearer —
     // verify-key and config/auto accept OAuth tokens — so changes made at
     // toolrator.org/mcp apply automatically. A 401 here means the token was
     // rejected; it must NOT log the user out (the OAuth entry stays for retry).
@@ -251,11 +250,6 @@ async function main(): Promise<void> {
   stateManager.onStateChange(() => {
     logger.debug("Auth state changed, sending tools/list_changed notification");
     const state = stateManager.getState();
-    if (state.apiKey) {
-      authClient.setApiKey(state.apiKey);
-    } else {
-      authClient.clearApiKey();
-    }
 
     // Re-resolve search config only when the auth key actually changes:
     // authenticated → pull from CONNECTOR_UPSTREAM_URL; otherwise use local file.
@@ -379,6 +373,32 @@ if (isDirectRun) {
 
 // ── Boot helper functions ──
 
+/** Filename written by the removed `manage_favorites` tool. */
+const LEGACY_FAVORITES_FILENAME = "favorites.json";
+
+/**
+ * Delete a `favorites.json` left behind by a pre-removal install.
+ *
+ * Idempotent and non-fatal: a missing file is the common case and must stay
+ * silent, and any filesystem failure is logged but never blocks boot.
+ */
+export async function removeLegacyFavoritesFile(
+  configDir: string,
+  logger: Logger
+): Promise<boolean> {
+  const filePath = join(configDir, LEGACY_FAVORITES_FILENAME);
+  try {
+    await unlink(filePath);
+    logger.info(
+      `Removed legacy ${LEGACY_FAVORITES_FILENAME} (the manage_favorites tool was removed).`,
+    );
+    return true;
+  } catch {
+    // ENOENT (nothing to clean) or an unremovable file — either way, harmless.
+    return false;
+  }
+}
+
 async function getCredentialsSavedAt(configDir: string): Promise<string | undefined> {
   try {
     const s = await stat(join(configDir, "credentials.json"));
@@ -462,7 +482,7 @@ async function pullRemoteConfig(
   opts?: { skipLogoutOn401?: boolean },
 ): Promise<EffectiveSearchConfig | null> {
   // Decide which upstream to use.
-  const decision = await pickRemoteBaseUrl(config, logger, apiKey);
+  const decision = await pickRemoteBaseUrl(config, logger);
   if (!decision) return null;
   const { baseUrl, source } = decision;
 
@@ -535,7 +555,6 @@ async function pullRemoteConfig(
 export async function pickRemoteBaseUrl(
   config: ToolconnectorConfig,
   logger: Logger,
-  _apiKey: string,
 ): Promise<{ baseUrl: string; source: EffectiveSearchConfig["source"] } | null> {
   const toolpanelUrl = config.toolpanelUrl;
   const authUrl = config.authUrl;
@@ -603,4 +622,30 @@ export async function isToolpanelAlive(toolpanelUrl: string, logger: Logger): Pr
   }
 }
 
-
+/**
+ * Bounded-wait helper for boot-time network resolution.
+ *
+ * Returns the promise's value when it settles before the deadline; returns
+ * `null` when the deadline passes first. The underlying promise is NOT
+ * cancelled — its side effects (search-config cache persistence,
+ * logout-on-invalid-key) still complete in the background; only the awaited
+ * result is dropped so boot can proceed deterministically.
+ */
+export async function withDeadline<T>(
+  promise: Promise<T>,
+  deadlineEpochMs: number,
+): Promise<T | null> {
+  const remaining = deadlineEpochMs - Date.now();
+  if (remaining <= 0) return null;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), remaining);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}

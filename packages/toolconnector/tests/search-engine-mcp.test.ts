@@ -3,7 +3,7 @@ import assert from "node:assert";
 import { writeFileSync, unlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { McpSearchEngine } from "../src/search-engine-mcp.js";
+import { McpSearchEngine } from "../src/search-engines.js";
 import { Logger } from "../src/config.js";
 
 const logger = new Logger("error");

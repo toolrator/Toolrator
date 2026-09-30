@@ -14,7 +14,7 @@
  */
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -26,7 +26,7 @@ import { Logger } from "../src/config.js";
 import { ConnectorStateManager } from "../src/state.js";
 import { OAuthStore, TOOLCONNECTOR_CLIENT_ID } from "../src/oauth-store.js";
 import { OAuthClient } from "../src/oauth-client.js";
-import { connectMcpClient } from "../src/mcp-connection.js";
+import { connectMcpClient } from "../src/mcp-client.js";
 import { startMockOauthAs, type MockOauthAs } from "./mock-oauth-as.js";
 
 const AS_PORT = 29345;
@@ -102,9 +102,20 @@ after(async () => {
   await rm(tempConfigDir, { recursive: true, force: true }).catch(() => {});
 });
 
-/** Put the state manager into the authenticated state (pullRemoteConfig only runs with a key). */
+/**
+ * Put the state manager into the authenticated state (pullRemoteConfig only runs with a key).
+ *
+ * Seeds `credentials.json` and re-runs boot, which is the real production path
+ * (ConnectorStateManager.init, Priority 2). Nothing in the connector writes that
+ * file any more — the legacy device flow that used to was removed.
+ */
 async function ensureAuthenticated(key: string): Promise<void> {
-  await stateManager.completeAuthentication(tempConfigDir, key, "dev@test");
+  await writeFile(
+    join(tempConfigDir, "credentials.json"),
+    JSON.stringify({ api_key: key, email: "dev@test", saved_at: new Date().toISOString() }),
+    "utf-8",
+  );
+  await stateManager.init(tempConfigDir, "");
 }
 
 /** Mirror of pullRemoteConfig's verify-key decision branch (401 → logout?). */
@@ -128,7 +139,7 @@ async function seedOAuthLogin(): Promise<{ accessToken: string; refreshToken: st
   as.approveDeviceGrant("MOCK-CODE");
   const entry = (await client.pollDeviceGrantOnce()) as Exclude<
     Awaited<ReturnType<typeof client.pollDeviceGrantOnce>>,
-    "pending" | null
+    "pending" | "slow_down" | null
   >;
   assert.ok(entry.tokens?.access_token);
   return {
@@ -322,7 +333,7 @@ describe("transport attach + 401 refresh retry", () => {
     // caller supplies them — no authProvider is attached. That precedence is
     // the documented escape hatch; lock it by checking the exported class
     // wiring through the public method shape.
-    const { ExternalMcpClient } = await import("../src/external-client.js");
+    const { ExternalMcpClient } = await import("../src/mcp-client.js");
     const ext = new ExternalMcpClient(logger, tempConfigDir);
     // Reaching into the private method via reflection is deliberate here:
     // this is a unit lock on the precedence rule, not a behavior test.

@@ -1,7 +1,8 @@
-import { readFile, writeFile, mkdir, unlink } from "node:fs/promises";
+import { readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { Logger } from "./config.js";
+import { OAuthStore } from "./oauth-store.js";
 
 export const schemaTimestamps = {
   lastUpdated: 0,
@@ -12,23 +13,30 @@ export const schemaTimestamps = {
 // Public Types
 // ---------------------------------------------------------------------------
 
-export type AuthState = "anonymous" | "device_flow_pending" | "authenticated";
+export type AuthState = "anonymous" | "authenticated";
+
+/** Which credential domain backs the authenticated state (unified model). */
+export type CredentialType = "api_key" | "oauth_token";
 
 export interface ConnectorState {
   authState: AuthState;
+  /** Set when authState === "authenticated" — which domain is in use. */
+  credentialType?: CredentialType;
   email?: string;
   apiKeyMask?: string;
   apiKey?: string;
-  deviceCode?: string;
-  userCode?: string;
-  verificationUri?: string;
-  deviceFlowExpiresAt?: number;
 }
 
 type StateChangeCallback = () => void;
 
 // ---------------------------------------------------------------------------
 // Credential File Schema
+//
+// READ-ONLY. The legacy Toolrator device flow was the only writer of this
+// file; it was removed with the flow. An API key now reaches the connector
+// either through `CONNECTOR_API_KEY` (Priority 1 at boot) or a credentials.json
+// the operator placed themselves (Priority 2). Nothing in the package writes
+// it, and `logout` still deletes it.
 // ---------------------------------------------------------------------------
 
 interface CredentialFile {
@@ -71,19 +79,22 @@ export class ConnectorStateManager {
       this.logger.info("API key provided via CONNECTOR_API_KEY environment variable");
       this.setState({
         authState: "authenticated",
+        credentialType: "api_key",
         apiKey: envApiKey,
         apiKeyMask: maskKey(envApiKey),
       });
       return;
     }
 
-    // Priority 2: saved credentials
+    // Priority 2: credentials.json placed in the config dir (see the note on
+    // CredentialFile — the package no longer writes this file).
     try {
       const creds = await this.loadCredentials(configDir);
       if (creds) {
         this.logger.info(`Loaded saved credentials for ${creds.email}`);
         this.setState({
           authState: "authenticated",
+          credentialType: "api_key",
           apiKey: creds.api_key,
           apiKeyMask: maskKey(creds.api_key),
           email: creds.email,
@@ -94,41 +105,41 @@ export class ConnectorStateManager {
       this.logger.debug("No saved credentials found");
     }
 
-    // Priority 3: anonymous
+    // Priority 3: stored OAuth tokens (unified state — an OAuth-only session
+    // is a full login even without an API key, so boot must reflect it).
+    try {
+      const entries = await new OAuthStore(configDir).allEntries();
+      const entry = entries.find((e) => e.tokens?.access_token);
+      if (entry) {
+        this.logger.info(`Loaded stored OAuth connection for ${entry.target}`);
+        // OAuthEntry carries no profile claims; email fills in on the first
+        // verify-key/status refresh.
+        this.setState({ authState: "authenticated", credentialType: "oauth_token" });
+        return;
+      }
+    } catch {
+      this.logger.debug("No stored OAuth connections found");
+    }
+
+    // Priority 4: anonymous
     this.logger.info("Starting in anonymous mode");
     this.setState({ authState: "anonymous" });
   }
 
-  beginDeviceFlow(
-    deviceCode: string,
-    userCode: string,
-    verificationUri: string,
-    expiresInSeconds: number,
-  ): void {
-    this.setState({
-      authState: "device_flow_pending",
-      deviceCode,
-      userCode,
-      verificationUri,
-      deviceFlowExpiresAt: Date.now() + expiresInSeconds * 1000,
-    });
-  }
-
   /**
-   * Complete authentication after 2FA verification succeeds.
+   * Unified state: a successful OAuth login is a full login even without an
+   * API key. Flips authState without touching any other fields; the OAuth
+   * token itself lives in the OAuthStore, not here.
    */
-  async completeAuthentication(
-    configDir: string,
-    apiKey: string,
-    email: string,
-  ): Promise<void> {
-    await this.saveCredentials(configDir, apiKey, email);
-    this.setState({
-      authState: "authenticated",
-      apiKey,
-      apiKeyMask: maskKey(apiKey),
-      email,
-    });
+  markOAuthAuthenticated(): void {
+    if (this.state.authState === "authenticated" && this.state.credentialType === "api_key") {
+      // Keep the API-key credential as the recorded domain — both are valid;
+      // the API key remains the stronger/machine credential.
+      return;
+    }
+    if (this.state.authState !== "authenticated" || this.state.credentialType !== "oauth_token") {
+      this.setState({ ...this.state, authState: "authenticated", credentialType: "oauth_token" });
+    }
   }
 
   /**
@@ -154,10 +165,9 @@ export class ConnectorStateManager {
 
     const changed =
       prevState.authState !== newState.authState ||
+      prevState.credentialType !== newState.credentialType ||
       prevState.email !== newState.email ||
-      prevState.apiKeyMask !== newState.apiKeyMask ||
-      prevState.deviceCode !== newState.deviceCode ||
-      prevState.userCode !== newState.userCode;
+      prevState.apiKeyMask !== newState.apiKeyMask;
 
     if (changed) {
       this.logger.debug(`State updated: authState=${newState.authState}, email=${newState.email}`);
@@ -190,24 +200,6 @@ export class ConnectorStateManager {
       };
     } catch {
       return null;
-    }
-  }
-
-  async saveCredentials(configDir: string, apiKey: string, email: string): Promise<void> {
-    try {
-      await mkdir(configDir, { recursive: true });
-      const payload: CredentialFile = {
-        api_key: apiKey,
-        email,
-        saved_at: new Date().toISOString(),
-      };
-      const filePath = join(configDir, CREDENTIAL_FILENAME);
-      // 0600: parity with oauth-tokens.json (OAuthStore.writeJson0600) —
-      // secrets never world/group-readable where the OS honors the bit.
-      await writeFile(filePath, JSON.stringify(payload, null, 2), { encoding: "utf-8", mode: 0o600 });
-      this.logger.debug(`Credentials saved to ${filePath}`);
-    } catch (err) {
-      this.logger.warn(`Failed to save credentials: ${String(err)}`);
     }
   }
 

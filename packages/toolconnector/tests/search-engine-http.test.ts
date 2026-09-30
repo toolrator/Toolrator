@@ -2,7 +2,7 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
-import { HttpSearchEngine } from "../src/search-engine-http.js";
+import { HttpSearchEngine } from "../src/search-engines.js";
 import { Logger, DEFAULT_ENGINE_ID } from "../src/config.js";
 
 const PORT = 34567;

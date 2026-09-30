@@ -4,19 +4,19 @@
  * Runs using the native node:test runner and standard asserts.
  * Spins up the infrastructure in-process:
  *   1. Mock MCP Server (external upstream target)
- *   2. Mock Auth Simulator (device flow)
  *
  * Exercises target resolution, structured-error classification, external tool
- * execution, device-flow authentication, and favorites. Toolconnector connects
- * directly to external MCP servers and authenticates against the configured
- * upstream backend (the same contract toolpanel implements).
+ * execution, and the unified credential state model (API key / OAuth token).
+ * Interactive login is OAuth 2.1 (oauth-client.test.ts covers it against a
+ * mock AS); this suite covers the API-key domain and state transitions.
  */
 
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { join } from "node:path";
 
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
@@ -24,22 +24,16 @@ import { serve } from "@hono/node-server";
 // Toolconnector modules under test
 import { Logger } from "../src/config.js";
 import { ConnectorStateManager, schemaTimestamps } from "../src/state.js";
-import { AuthClient } from "../src/auth-client.js";
-import { ExternalMcpClient } from "../src/external-client.js";
+import { ExternalMcpClient } from "../src/mcp-client.js";
 import * as descriptions from "../src/descriptions.js";
-import * as favorites from "../src/favorites.js";
-import { resolveTarget, resolveTargetAsync } from "../src/target-resolver.js";
+import { resolveTarget, resolveTargetAsync } from "../src/mcp-client.js";
 import { classifyUpstreamError } from "../src/errors.js";
-
-// Mock auth server
-import { startMockAuthServer } from "./mock-auth-sim.js";
 
 // ============================================================================
 // Configuration Constants
 // ============================================================================
 
 const UPSTREAM_PORT = 29321;
-const AUTH_PORT = 29310;
 const USER_ACTIVE_TOKEN = "tc-test-user-key";
 
 // ============================================================================
@@ -131,16 +125,11 @@ function createMockUpstreamApp(): Hono {
 
 describe("Toolconnector E2E Test Suite", () => {
   let upstreamServer: any;
-  let authSim: any;
   let tempConfigDir: string;
 
   let logger: Logger;
   let stateManager: ConnectorStateManager;
-  let authClient: AuthClient;
   let externalClient: ExternalMcpClient;
-
-  let deviceCode = "";
-  let userCode = "";
 
   before(async () => {
     // 1. Mock Upstream MCP Server
@@ -151,16 +140,12 @@ describe("Toolconnector E2E Test Suite", () => {
       port: UPSTREAM_PORT,
     });
 
-    // 2. Mock Auth Simulator (upstream auth / device flow)
-    authSim = await startMockAuthServer(AUTH_PORT, USER_ACTIVE_TOKEN);
-
     // Create temp dir for credential storage
     tempConfigDir = await mkdtemp(path.join(tmpdir(), "tc-test-"));
 
     // Create Toolconnector Components
     logger = new Logger("debug");
     stateManager = new ConnectorStateManager(logger);
-    authClient = new AuthClient(authSim.baseUrl, authSim.baseUrl, logger);
     externalClient = new ExternalMcpClient(logger);
 
     // Initialize as anonymous (no env key, no saved creds)
@@ -173,7 +158,6 @@ describe("Toolconnector E2E Test Suite", () => {
     } catch { /* ignore */ }
 
     await new Promise<void>((res, rej) => upstreamServer.close((e?: Error) => e ? rej(e) : res()));
-    await authSim.close();
   });
 
   // =========================================================================
@@ -257,97 +241,83 @@ describe("Toolconnector E2E Test Suite", () => {
   });
 
   // =========================================================================
-  // 4. Device Flow Authentication
+  // 4. Unified Credential State (API-key domain; OAuth is covered against the
+  // mock AS in mcp-features-compliance.test.ts and oauth-client.test.ts)
   // =========================================================================
 
-  test("startDeviceFlow returns codes and verification URL", async () => {
-    const flow = await authClient.startDeviceFlow();
-    assert(flow.device_code, "Expected device_code");
-    assert(flow.user_code === "TEST-1234", `Expected user code TEST-1234, got: ${flow.user_code}`);
-    assert(flow.verification_uri.includes("/device"), "Expected verification URI");
-
-    deviceCode = flow.device_code;
-    userCode = flow.user_code;
-    stateManager.beginDeviceFlow(deviceCode, userCode, flow.verification_uri, flow.expires_in);
-  });
-
-  test("auth state is device_flow_pending", () => {
-    const state = stateManager.getState();
-    assert(state.authState === "device_flow_pending", "Expected device_flow_pending");
-    assert(state.userCode === "TEST-1234", "Expected userCode saved");
-  });
-
-  test("polling pending device flow returns pending status", async () => {
-    const status = await authClient.pollDeviceFlow(deviceCode);
-    assert(status.status === "pending", `Expected pending status, got: ${status.status}`);
-  });
-
-  test("confirm device flow via simulator success", async () => {
-    const res = await fetch(`${authSim.baseUrl}/api/auth/device/confirm`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_code: userCode }),
-    });
-    assert(res.ok, "Expected confirmation response to be OK");
-    const json = await res.json() as { success: boolean };
-    assert(json.success === true, "Expected success: true");
-  });
-
-  test("polling confirmed device flow returns success and API key", async () => {
-    const status = await authClient.pollDeviceFlow(deviceCode);
-    assert(status.status === "success", "Expected success status");
-    assert(status.api_key === USER_ACTIVE_TOKEN, "Expected active api key");
-    assert(status.email === "test@example.com", "Expected email address");
-
-    authClient.setApiKey(status.api_key!);
-    await stateManager.completeAuthentication(
-      tempConfigDir,
-      status.api_key!,
-      status.email || "",
+  test("API-key login marks authenticated with the api_key domain", async () => {
+    // Seed the API-key credential the way a real install holds one: a
+    // credentials.json in the config dir, then a boot read. This is the actual
+    // production path (ConnectorStateManager.init, Priority 2) — since the
+    // legacy device flow was removed, nothing in the connector *writes* this
+    // file any more, so the boot read is the only way an API key is adopted.
+    await writeFile(
+      join(tempConfigDir, "credentials.json"),
+      JSON.stringify({
+        api_key: USER_ACTIVE_TOKEN,
+        email: "test@example.com",
+        saved_at: new Date().toISOString(),
+      }),
+      "utf-8",
     );
-  });
+    await stateManager.init(tempConfigDir, "");
 
-  test("auth state is now authenticated", () => {
     const state = stateManager.getState();
     assert(state.authState === "authenticated", "Expected state to be authenticated");
+    assert(state.credentialType === "api_key", "Expected api_key domain");
     assert(state.email === "test@example.com", "Expected email");
   });
 
-  // =========================================================================
-  // 5. Favorites & Bookmark Operations
-  // =========================================================================
-
-  test("addFavorite bookmarks an external MCP server with notes", async () => {
-    const upstreamUrl = `http://127.0.0.1:${UPSTREAM_PORT}/mcp`;
-    await favorites.addFavorite(tempConfigDir, upstreamUrl, "Awesome server", logger);
-    const list = await favorites.loadFavorites(tempConfigDir, logger);
-    assert(list.length === 1, "Expected 1 favorite");
-    assert(list[0].mcpNameOrUrl === upstreamUrl, "Expected name match");
-    assert(list[0].notes === "Awesome server", "Expected notes match");
+  test("describeManageAuth reflects the api_key domain", () => {
+    const desc = descriptions.describeManageAuth(stateManager.getState());
+    assert(desc.includes("Logged in as test@example.com"), `Expected key-domain text in: ${desc}`);
+    assert(!desc.includes("start_device_flow"), "legacy action must not appear");
   });
 
-  test("error classifies with injected memory_note on failure", () => {
-    const e = classifyUpstreamError(500, "internal error", {
-      target: `http://127.0.0.1:${UPSTREAM_PORT}/mcp`,
-      memory_note: "Awesome server",
-    });
-    assert(e.memory_note === "Awesome server", "Expected memory_note to be injected");
+  test("boot init from stored OAuth tokens marks authenticated (unified state)", async () => {
+    // Fresh state manager over a config dir holding an OAuth entry only.
+    const oauthDir = await mkdtemp(path.join(tmpdir(), "tc-oauthboot-"));
+    try {
+      await writeFile(
+        join(oauthDir, "oauth-tokens.json"),
+        // Store file shape: { entries: OAuthEntry[] } (see OAuthStore.allEntries).
+        JSON.stringify({
+          entries: [
+            {
+              issuer: "https://as.example.com",
+            target: "https://as.example.com/mcp",
+            clientId: "https://toolrator.org/.well-known/oauth-client/toolconnector.json",
+            tokens: { access_token: "at_test", refresh_token: "rt_test", scope: "profile:read" },
+            savedAt: new Date().toISOString(),
+            },
+          ],
+        }),
+        "utf-8",
+      );
+
+      const bootManager = new ConnectorStateManager(logger);
+      await bootManager.init(oauthDir, "");
+      const state = bootManager.getState();
+      assert(state.authState === "authenticated", "OAuth-only boot must be authenticated");
+      assert(state.credentialType === "oauth_token", "Expected oauth_token domain");
+    } finally {
+      await rm(oauthDir, { recursive: true, force: true });
+    }
   });
 
-  test("removeFavorite deletes bookmark", async () => {
-    const upstreamUrl = `http://127.0.0.1:${UPSTREAM_PORT}/mcp`;
-    const removed = await favorites.removeFavorite(tempConfigDir, upstreamUrl, logger);
-    assert(removed === true, "Expected true");
-    const list = await favorites.loadFavorites(tempConfigDir, logger);
-    assert(list.length === 0, "Expected 0 favorites left");
+  test("boot init from CONNECTOR_API_KEY env still wins (Priority 1)", async () => {
+    const envManager = new ConnectorStateManager(logger);
+    await envManager.init(tempConfigDir, "sk-env-key");
+    const state = envManager.getState();
+    assert(state.authState === "authenticated", "env key authenticates");
+    assert(state.credentialType === "api_key", "Expected api_key domain");
   });
 
   // =========================================================================
-  // 6. Logout
+  // 5. Logout
   // =========================================================================
 
   test("logout returns to anonymous mode", async () => {
-    authClient.clearApiKey();
     await stateManager.logout(tempConfigDir);
     const state = stateManager.getState();
     assert(state.authState === "anonymous", "Expected authState to be anonymous");

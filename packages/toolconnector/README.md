@@ -38,7 +38,7 @@ The **Toolconnector** is a lightweight, local **stdio Model Context Protocol (MC
 
 `toolconnector` acts as the **universal adapter**. By installing `toolconnector` locally, your local AI agent gains instant, secure, and authenticated access to any configured search-engine backend (via toolpanel or a compatible upstream) and external MCP servers.
 
-Since v0.1.0, the tool interface is exactly **4 tools**, so the agent's context window carries four tool definitions instead of dozens.
+Since v0.1.0, the tool interface is exactly **3 tools**, so the agent's context window carries three tool definitions instead of dozens.
 
 ---
 
@@ -61,7 +61,7 @@ graph TD
 
 ## 🛠️ Unified Tool Specifications
 
-The `toolconnector` exposes exactly **4 client-facing tools** to your AI agent:
+The `toolconnector` exposes exactly **3 client-facing tools** to your AI agent:
 
 ### 1. `search_mcp_ecosystem`
 * **Purpose**: Search the configured search ecosystem (and any custom search engines) for tools, resources, or prompts.
@@ -84,23 +84,14 @@ The `toolconnector` exposes exactly **4 client-facing tools** to your AI agent:
 * **Returns**: The server's raw response envelope (with trust-level and prompt-injection warning).
 
 ### 3. `manage_auth`
-* **Purpose**: Manage authentication — OAuth 2.1 login against the Toolrator cloud (or any MCP server that fronts an OAuth 2.1 authorization server), plus the legacy API-key device flow.
+* **Purpose**: Manage authentication — OAuth 2.1 login against the Toolrator cloud (or any MCP server that fronts an OAuth 2.1 authorization server), plus status/logout for the API-key machine credential.
 * **Parameters**:
-  * `action` (required): The auth action to perform. Dynamically scoped by state: `"status"`, `"oauth_status"`, `"logout"`, `"oauth_logout"` when authenticated; `"status"`, `"start_oauth"`, `"complete_oauth"`, `"oauth_status"`, `"start_device_flow"`, `"poll_device_flow"` when anonymous (or while a flow is pending).
-  * `device_code` (string, optional): Required for `poll_device_flow`.
-  * `target` (string, optional): For `start_oauth` — the MCP server URL to authenticate against (default: the Toolrator cloud, `https://toolrator.org/mcp`).
+  * `action` (required): `"status"`, `"start_oauth"`, `"complete_oauth"`, `"oauth_status"`, `"oauth_logout"`, or `"logout"` (always all six — the schema is static so cached client schemas never go stale).
+  * `target` (string, optional): For `start_oauth` — the MCP server URL to authenticate against (default: the configured upstream's `/mcp` endpoint; `https://toolrator.org/mcp` by default).
   * `scopes` (string[], optional): For `start_oauth` — OAuth scopes to request (defaults cover search-engine configuration).
   * `redirect_url` (string, optional): Required for `complete_oauth` — the full post-approval redirect URL to paste back.
-* **Returns**: Login state, verification URL and user code (device flows), paste-back instructions, or stored-connection status (tokens masked).
+* **Returns**: Login instructions (device code or paste-back URL), unified login state (authenticated = API key **or** OAuth), or stored-connection status (tokens masked).
 * **Auto-apply**: after a successful OAuth login the connector re-pulls the remote search-engine configuration with the new access token and applies it immediately — changes made at toolrator.org/mcp reach the connector without a restart.
-
-### 4. `manage_favorites`
-* **Purpose**: Manage local MCP server bookmarks with cross-session custom memory notes.
-* **Parameters**:
-  * `action` (`"list" | "add" | "remove"`, required).
-  * `target` (string, optional): Required for add/remove.
-  * `notes` (string, optional): Free-text troubleshooting notes to associate with the bookmarked server.
-* **Returns**: List of bookmarks or confirmation.
 
 ### Stale-tool-list compensation
 
@@ -108,9 +99,9 @@ The connector advertises `tools.listChanged` and sends `notifications/tools/list
 
 ---
 
-## 🔐 Timed Passwordless Device Flow Auth
+## 🔐 Authentication
 
-To log in and access authenticated MCP servers, the connector implements a passwordless device flow:
+Interactive login is **OAuth 2.1 only**. The legacy Toolrator-specific API-key device flow has been removed, along with the two `manage_auth` actions that drove it.
 
 ```mermaid
 sequenceDiagram
@@ -118,34 +109,37 @@ sequenceDiagram
     actor User as User
     actor Agent as AI Agent
     participant TC as 🔌 Toolconnector
-    participant Server as 🌐 Upstream Server
-    
-    Agent->>TC: manage_auth action: "start_device_flow"
-    TC->>Server: POST /api/auth/device/start
-    Server-->>TC: Returns verification_uri & user_code
+    participant AS as 🔑 Authorization Server
+
+    Agent->>TC: manage_auth action: "start_oauth"
+    TC->>AS: Discover AS metadata (RFC 9728 PRM → RFC 8414)
+    TC->>AS: POST device_authorization_endpoint (RFC 8628)
+    AS-->>TC: verification_uri (+ user_code)
     TC-->>Agent: Prints user instructions
-    Agent-->>User: "Open http://... and enter TEST-1234"
-    
-    Note over User: User logs in on the upstream account UI & enters code
-    
-    TC->>Server: POST /api/auth/device/poll automated background loop
-    Server-->>TC: 200 OK Authenticated, returns API key
-    TC-->>Agent: Auth complete! Persists credentials.
+    Agent-->>User: "Open http://... and approve the sign-in"
+
+    Note over User: User approves in the browser
+
+    TC->>AS: POST /api/oauth/token (grant_type=device_code) — background polling
+    AS-->>TC: access_token + refresh_token
+    TC-->>Agent: Auth complete! Tokens stored; remote config re-pulled and applied.
 ```
+
+Upstreams without a device endpoint fall back to **authorization-code + PKCE with paste-back** (see below). `CONNECTOR_API_KEY` (env) and a previously saved `credentials.json` remain valid **machine credentials**: they authenticate the same session, and `logout` clears both domains.
 
 ---
 
-The connector also uses `POST /api/auth/verify-key` (with retry/backoff) to validate stored credentials and `GET /api/connector/config/auto` to fetch the authoritative search-engine list — self-hosted upstreams must implement both; both endpoints accept an OAuth access token as the bearer in place of an API key. A stored credential that keeps failing verification (401 on all retries) logs the user out and clears stored credentials.
+The connector uses `POST /api/auth/verify-key` (with retry/backoff) to validate stored credentials and `GET /api/connector/config/auto` to fetch the authoritative search-engine list — self-hosted upstreams must implement both; both endpoints accept an OAuth access token as the bearer in place of an API key. A stored credential that keeps failing verification (401 on all retries) logs the user out and clears stored credentials.
 
 ## 🔏 OAuth 2.1
 
 The connector speaks full OAuth 2.1 — see [`OAUTH.md`](./OAUTH.md) for the grant-type explainer and what a remote/CLI client can and cannot do:
 
 - **`manage_auth action: "start_oauth"`** — discovers the authorization server via Protected Resource Metadata (RFC 9728), then runs the **device grant** (RFC 8628) when advertised (Toolrator cloud: open the URL, approve, done — the connector polls in the background) or **authorization-code + PKCE with paste-back** otherwise (the browser lands on a dead loopback page; the user copies the full redirect URL back). CSRF `state` is checked constant-time, `iss` (RFC 9207) is validated, and PKCE S256 is always enforced.
-- **Tokens live in `<configDir>/oauth-tokens.json`** (0600, atomic writes), keyed by authorization-server issuer with the target recorded; `credentials.json` and the PKCE verifier get the same treatment. No token material is ever logged or returned by tools (status output is masked).
+- **Tokens live in `<configDir>/oauth-tokens.json`** (0600, atomic writes), keyed by authorization-server issuer with the target recorded; the pending PKCE verifier is stored the same way in `oauth-pending.json`. No token material is ever logged or returned by tools (status output is masked).
 - **Automatic attachment**: `mcp_server` calls to a server with stored OAuth tokens get the bearer injected by the transport (and refreshed on 401) — no headers needed. Explicit `headers` still win and remain the last-resort escape hatch.
 - **Config auto-apply**: the access token doubles as the upstream credential for `verify-key` / `config/auto`, so a login at toolrator.org/mcp applies the remote engine configuration immediately.
-- Legacy API-key device flow (`start_device_flow`) keeps working unchanged for upstreams without an OAuth surface.
+- The legacy API-key device flow has been **removed** — OAuth 2.1 is the only interactive login. The API key itself remains valid as a machine credential: set `CONNECTOR_API_KEY`, or drop a `credentials.json` into the config dir. Nothing in the connector *writes* `credentials.json` any more (the removed flow was its only writer), and `logout` deletes it.
 
 ## ⚠️ Structured Error Architecture
 
@@ -155,8 +149,7 @@ When a tool execution against an upstream MCP server fails, `mcp_server` with `m
 {
   "error_code": "auth_required",
   "reason": "upstream_auth",
-  "required_step": "Call manage_auth with action: 'start_oauth' (OAuth 2.1 login; 'start_device_flow' as legacy fallback)",
-  "memory_note": "Free-text custom notes associated with your favorites bookmark"
+  "required_step": "Call manage_auth with action: 'start_oauth' (OAuth 2.1 login)"
 }
 ```
 
@@ -181,8 +174,8 @@ You can configure `toolconnector` via plain environment variables. There is no `
 
 Available environment variables:
 
-- `CONNECTOR_API_KEY`: Pre-configured API key (skips the device login flow if provided).
-- `CONNECTOR_CONFIG_DIR`: Directory for storing local state (`credentials.json`, `favorites.json`, `search-engines.json`). Defaults to an OS-specific path (see [Config directory](#config-directory)).
+- `CONNECTOR_API_KEY`: Pre-configured API key (machine credential; skips interactive OAuth login).
+- `CONNECTOR_CONFIG_DIR`: Directory for local state (`search-engines.json`, `oauth-tokens.json`, `schemas/`). A `credentials.json` placed here by hand is also read at boot. Defaults to an OS-specific path (see [Config directory](#config-directory)).
 - `CONNECTOR_UPSTREAM_URL`: Base URL for authentication endpoints (default: `https://toolrator.org`). Used as the neutral fallback so non-technical / remotely-hosted users without toolpanel still get the `auto` flow; override to point at your own upstream.
 - `CONNECTOR_DEFAULT_UPSTREAM_URL`: Default base URL fallback when `CONNECTOR_UPSTREAM_URL` is unset (default: `https://toolrator.org`).
 - `CONNECTOR_PRODUCT_NAME`: Product name driving product-derived identifiers — the config-dir subfolder, the implicit-default search-engine id (`<productName>-default`), and any user-facing string that mentions the product. The auth-management tool name itself (`manage_auth`) is fixed and NOT interpolated. Default: `toolconnector`.
@@ -223,7 +216,7 @@ Local state is stored in `CONNECTOR_CONFIG_DIR`, or the following OS default (wh
 - **macOS**: `~/Library/Application Support/<productName>`
 - **Linux**: `$XDG_CONFIG_HOME/<productName>` (falls back to `~/.config/<productName>`)
 
-This directory holds `credentials.json`, `favorites.json`, `search-engines.json`, and a `schemas/` subdirectory (a per-engine cache of schemas fetched from each engine's `schemaUrl`).
+This directory holds `search-engines.json`, `oauth-tokens.json`, `oauth-pending.json` (an in-flight grant, if any), and a `schemas/` subdirectory (a per-engine cache of schemas fetched from each engine's `schemaUrl`). A `credentials.json` placed here by hand is read at boot as an API-key credential; the connector no longer writes one.
 
 ---
 

@@ -4,22 +4,26 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { registerAllTools } from "../src/tools.js";
 import { ConnectorStateManager } from "../src/state.js";
-import { AuthClient } from "../src/auth-client.js";
-import { ExternalMcpClient } from "../src/external-client.js";
+import { ExternalMcpClient } from "../src/mcp-client.js";
 import { Logger } from "../src/config.js";
-import { mcpCache } from "../src/cache.js";
+import { mcpCache } from "../src/mcp-client.js";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { OAuthStore } from "../src/oauth-store.js";
+import { startMockOauthAs, type MockOauthAs } from "./mock-oauth-as.js";
+
+let mockAs: MockOauthAs;
 
 // ============================================================================
 // Mock Upstream MCP Server Counters & Variables
 // ============================================================================
 
 const PORT = 29410;
+const MOCK_AS_PORT = 29342;
 const MODERN_URL = `http://127.0.0.1:${PORT}/modern`;
 const LEGACY_URL = `http://127.0.0.1:${PORT}/legacy`;
 const BIG_URL = `http://127.0.0.1:${PORT}/big`;
@@ -358,15 +362,16 @@ describe("MCP Feature Compliance Test Suite", () => {
     await stateManager.init(tempConfigDir, "");
 
     // 3. Set up clients and registered tools bridge
-    const authClient = new AuthClient("http://127.0.0.1:29310", "http://127.0.0.1:29310", logger);
-    const externalClient = new ExternalMcpClient(logger);
+    // Mock OAuth 2.1 AS for the device-grant E2E (login = fully logged in).
+    mockAs = await startMockOauthAs(MOCK_AS_PORT);
 
+    const externalClient = new ExternalMcpClient(logger);
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     toolconnectorServer = new McpServer({ name: "toolconnector-compliance", version: "0.1.0" });
     // Set up search config & registry for registerAllTools
     const { loadSearchConfig } = await import("../src/search-config.js");
-    const { createSearchEngine } = await import("../src/search-engine.js");
-    const { SearchRegistry } = await import("../src/search-registry.js");
+    const { createSearchEngine } = await import("../src/search-engines.js");
+    const { SearchRegistry } = await import("../src/search-engines.js");
     const { DEFAULT_SCHEMA } = await import("../src/schema-cache.js");
 
     const searchConfig = loadSearchConfig({}, tempConfigDir);
@@ -381,10 +386,15 @@ describe("MCP Feature Compliance Test Suite", () => {
       toolconnectorServer,
       stateManager,
       registry,
-      authClient,
       externalClient,
       tempConfigDir,
-      logger
+      logger,
+      undefined,
+      // onRefreshSearchConfig: API-key re-pull (unused in these tests).
+      async () => false,
+      // onOAuthLogin: the post-login config re-pull. Simulated success so the
+      // device-grant E2E below can assert the full "login = configured" path.
+      async () => true
     );
 
     await toolconnectorServer.connect(serverTransport);
@@ -396,6 +406,7 @@ describe("MCP Feature Compliance Test Suite", () => {
     await client.close();
     await toolconnectorServer.close();
     mockServer.close();
+    await mockAs.close().catch(() => {});
     await rm(tempConfigDir, { recursive: true, force: true });
   });
 
@@ -425,7 +436,7 @@ describe("MCP Feature Compliance Test Suite", () => {
 
   // --- 2. Response Caching ---
 
-  test("listTools caching using ttlMs and cacheScope", async () => {
+  test("listTools caching honours the server's ttlMs", async () => {
     mcpCache.clear();
     modernListCount = 0;
 
@@ -659,5 +670,130 @@ describe("MCP Feature Compliance Test Suite", () => {
     assert(res.isError === true, "Expected missing method to error");
     const text = (res as any).content[0].text;
     assert(text.includes("method"), "Expected error text to mention method");
+  });
+
+  // --- manage_auth action surface ---
+
+  test("manage_auth offers every action regardless of auth state", async () => {
+    // The action enum is STATIC (6 OAuth 2.1 actions): hosts cache tool
+    // schemas and many ignore tools/list_changed, so any state-derived enum
+    // goes stale by construction. The legacy API-key device-flow actions
+    // (start_device_flow / poll_device_flow) were removed.
+    const { tools } = await client.listTools();
+    const manageAuth = tools.find((t) => t.name === "manage_auth");
+    assert(manageAuth, "Expected manage_auth to be registered");
+
+    const action = (manageAuth.inputSchema as any).properties.action;
+    const allowed: string[] = action.enum;
+    for (const expected of [
+      "status",
+      "logout",
+      "oauth_status",
+      "oauth_logout",
+      "start_oauth",
+      "complete_oauth",
+    ]) {
+      assert(
+        allowed.includes(expected),
+        `Expected '${expected}' in manage_auth action enum, got: ${allowed.join(", ")}`
+      );
+    }
+    for (const removed of ["start_device_flow", "poll_device_flow"]) {
+      assert(
+        !allowed.includes(removed),
+        `Legacy action '${removed}' must no longer be offered`
+      );
+    }
+  });
+
+  test("oauth_logout on a session with no stored tokens is a clean no-op", async () => {
+    // The handler must stay total now that the action is always reachable.
+    const res = await client.callTool({
+      name: "manage_auth",
+      arguments: { action: "oauth_logout" }
+    });
+    assert(res.isError !== true, "Expected oauth_logout to succeed with an empty store");
+    const text = (res as any).content[0].text;
+    assert(
+      text.includes("No OAuth connections") || text.includes("Removed"),
+      `Expected a clear no-op message, got: ${text}`
+    );
+  });
+
+  // --- OAuth 2.1 end-to-end (RFC 8628 device grant) ---
+  // Regression lock for the migration goal: a login made THROUGH the
+  // connector is a full login — unified state, credential domain, and the
+  // account search-config re-pull all fire.
+
+  test("OAuth device-grant login flips unified state and applies config", async () => {
+    // Precondition: anonymous before the flow.
+    let res = await client.callTool({
+      name: "manage_auth",
+      arguments: { action: "status" },
+    });
+    let status = JSON.parse((res as any).content[0].text);
+    assert.equal(status.authenticated, false, "precondition: anonymous before login");
+
+    // 1. start_oauth → device grant against the mock AS.
+    res = await client.callTool({
+      name: "manage_auth",
+      arguments: { action: "start_oauth", target: `${mockAs.baseUrl}/mcp` },
+    });
+    assert(res.isError !== true, `start_oauth failed: ${(res as any).content[0].text}`);
+    const startText = (res as any).content[0].text as string;
+    assert.match(startText, /Open this URL in a browser/, "device-grant instructions returned");
+
+    // 2. Extract the user code and approve it (browser stand-in). The mock
+    // AS advertises verification_uri_complete, so the code rides in the URL
+    // (?code=…); a bare verification_uri would carry a separate Code: line.
+    const codeMatch = startText.match(/code=([A-Z0-9-]+)/) ?? startText.match(/Code:\s*([A-Z0-9-]+)/);
+    assert.ok(codeMatch, `user code not found in instructions: ${startText}`);
+    assert.ok(mockAs.approveDeviceGrant(codeMatch[1]), "device grant approved");
+
+    // 3. The connector's background poller (1s cadence against the mock)
+    // completes the exchange and flips the unified state.
+    const deadline = Date.now() + 15_000;
+    do {
+      await new Promise((r) => setTimeout(r, 500));
+      res = await client.callTool({
+        name: "manage_auth",
+        arguments: { action: "status" },
+      });
+      status = JSON.parse((res as any).content[0].text);
+    } while (status.authenticated !== true && Date.now() < deadline);
+
+    assert.equal(status.authenticated, true, "OAuth login = authenticated (unified state)");
+    assert.equal(status.credential, "oauth_token", "credential domain is oauth_token");
+    assert.equal(status.cloud_verified, true, "config re-pull ran with the OAuth token");
+    assert.equal(status.search_config_source, "remote", "remote search config applied");
+
+    // 4. oauth_status lists the stored connection.
+    res = await client.callTool({
+      name: "manage_auth",
+      arguments: { action: "oauth_status" },
+    });
+    const oauthStatus = JSON.parse((res as any).content[0].text);
+    assert.ok(oauthStatus.oauth_connections.length >= 1, "stored OAuth connection listed");
+    assert.equal(oauthStatus.oauth_connections[0].target, `${mockAs.baseUrl}/mcp`);
+  });
+
+  test("logout clears BOTH credential domains", async () => {
+    const res = await client.callTool({
+      name: "manage_auth",
+      arguments: { action: "logout" },
+    });
+    assert(res.isError !== true, `logout failed: ${(res as any).content[0].text}`);
+    assert.match((res as any).content[0].text, /API key and OAuth tokens cleared/);
+
+    // No OAuth entries survive logout.
+    const entries = await new OAuthStore(tempConfigDir).allEntries();
+    assert.equal(entries.length, 0, "OAuth store empty after logout");
+
+    const statusRes = await client.callTool({
+      name: "manage_auth",
+      arguments: { action: "status" },
+    });
+    const parsed = JSON.parse((statusRes as any).content[0].text);
+    assert.equal(parsed.authenticated, false, "back to anonymous");
   });
 });

@@ -2,25 +2,17 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import type { Logger } from "./config.js";
 import { type ConnectorStateManager, schemaTimestamps } from "./state.js";
-import type { AuthClient } from "./auth-client.js";
-import type { ExternalMcpClient } from "./external-client.js";
+import type { ExternalMcpClient } from "./mcp-client.js";
 import { OAuthStore, maskToken } from "./oauth-store.js";
 import { OAuthClient } from "./oauth-client.js";
 import {
   describeSearchMcpEcosystem,
   describeMcpServer,
   describeManageAuth,
-  describeManageFavorites,
 } from "./descriptions.js";
-import type { SearchRegistry } from "./search-registry.js";
+import type { SearchRegistry } from "./search-engines.js";
 
-import {
-  addFavorite,
-  removeFavorite,
-  listFavoritesWithDetails,
-  getNoteForServer,
-} from "./favorites.js";
-import { resolveTarget, resolveTargetAsync } from "./target-resolver.js";
+import { resolveTargetAsync } from "./mcp-client.js";
 import { registerCurrentSchema } from "./stale-schema.js";
 import {
   createStructuredError,
@@ -32,16 +24,15 @@ import {
 // Tool Registration
 // ---------------------------------------------------------------------------
 
-// Device-flow background polling cadence: fast (10s) for the first minute
-// while the user is actively confirming, then slow (60s) until the flow
-// expires, completes, or is cleared.
+// Device-flow background polling is never faster than the AS-provided
+// interval. It backs off to these minimum delays and adds 5s after slow_down.
 const POLL_FAST_INTERVAL_MS = 10_000;
 const POLL_FAST_WINDOW_MS = 60_000;
 const POLL_SLOW_INTERVAL_MS = 60_000;
 
-// Default OAuth scopes for a Toolrator cloud login: enough to read the
-// profile, pull the search-engine + server configuration the connector
-// applies locally, and write engine config changes made at toolrator.org/mcp.
+// Default OAuth scopes for a Toolrator login: enough to read the profile,
+// pull the search-engine + server configuration the connector applies locally,
+// and write engine config changes made at the configured MCP endpoint.
 const DEFAULT_OAUTH_SCOPES = [
   "profile:read",
   "engines:read",
@@ -61,7 +52,6 @@ export function registerAllTools(
   server: McpServer,
   stateManager: ConnectorStateManager,
   registry: SearchRegistry,
-  authClient: AuthClient,
   externalClient: ExternalMcpClient,
   configDir: string,
   logger: Logger,
@@ -155,7 +145,6 @@ export function registerAllTools(
       })
     },
     async ({ target, method, params, headers }) => {
-      const memory_note = await getNoteForServer(configDir, target, logger);
       try {
         if (!method) {
           return formatErrorResponse(createStructuredError("execution_failed", {
@@ -240,7 +229,6 @@ export function registerAllTools(
         const errMsg = err.message || String(err);
         const structErr = classifyUpstreamError(statusCode, errMsg, {
           target,
-          memory_note,
           code: typeof err.code === "number" ? err.code : undefined
         });
         return formatErrorResponse(structErr);
@@ -249,7 +237,7 @@ export function registerAllTools(
   );
 
   // =========================================================================
-  // 5. Manage Auth
+  // 3. Manage Auth
   // =========================================================================
 
   let activePoller: NodeJS.Timeout | null = null;
@@ -268,6 +256,10 @@ export function registerAllTools(
    */
   const applyPostLogin = async (accessToken: string, label: string): Promise<string> => {
     const parts: string[] = [`OAuth login complete (${label}).`];
+    // Unified state: a successful OAuth login is a full login. The token
+    // response carries no profile claims, so email stays undefined until the
+    // next verify-key/status refresh fills it in.
+    stateManager.markOAuthAuthenticated();
     try {
       if (onOAuthLogin) {
         const applied = await onOAuthLogin(accessToken);
@@ -295,12 +287,25 @@ export function registerAllTools(
     {
       description: describeManageAuth(stateManager.getState(), searchConfigState),
       inputSchema: z.object({
-        action: (stateManager.getState().authState === "authenticated"
-          ? z.enum(["status", "logout", "oauth_status", "oauth_logout"])
-          : z.enum(["status", "start_device_flow", "poll_device_flow", "start_oauth", "complete_oauth", "oauth_status"])
-        ).describe("The auth action to perform"),
-        device_code: z.string().optional()
-          .describe("Required for 'poll_device_flow' — the device code from start_device_flow"),
+        // Every action is always offered, never a state-filtered subset.
+        // MCP hosts cache tool schemas and ignore notifications/tools/list_changed,
+        // so an enum derived from authState at registration time is stale by
+        // construction: it is read once at boot, and it cannot react to a login
+        // that happens later in the session. That is exactly how an OAuth-only
+        // session ended up unable to call 'oauth_logout' (the only way to clear
+        // its stored tokens) while holding a working login. The handlers are
+        // already total — 'oauth_logout' on an empty store reports "No OAuth
+        // connections to remove", 'logout' is idempotent — so exposing them
+        // unconditionally costs nothing. The description above still tells the
+        // agent never to log out unless the user explicitly asks.
+        action: z.enum([
+          "status",
+          "logout",
+          "oauth_status",
+          "oauth_logout",
+          "start_oauth",
+          "complete_oauth",
+        ]).describe("The auth action to perform"),
         target: z.string().optional()
           .describe("For 'start_oauth': the MCP server URL to authenticate against. Default: the Toolrator cloud"),
         scopes: z.array(z.string()).optional()
@@ -309,20 +314,46 @@ export function registerAllTools(
           .describe("Required for 'complete_oauth' — the full post-approval redirect URL to paste back"),
       })
     },
-    async ({ action, device_code, target, scopes, redirect_url }) => {
+    async ({ action, target, scopes, redirect_url }) => {
             const currentState = stateManager.getState();
 
             if (action === "status") {
               let cloudVerified: boolean | undefined;
               let searchConfigRefreshed: boolean | undefined;
 
-              // When authenticated, actively verify and refresh config from the cloud
-              if (currentState.authState === "authenticated" && currentState.apiKey && onRefreshSearchConfig) {
+              // Pick the credential to refresh the remote config with. Prefer the
+              // API key; otherwise fall back to a stored OAuth access token.
+              //
+              // This fallback is the whole point: authState tracks ONLY the API
+              // key, so in an OAuth-only session the old API-key-only condition
+              // never held. Status therefore never re-pulled, and changes made at
+              // toolrator.org/mcp after login never reached the connector even
+              // though its own tool description promised they would.
+              const oauthEntries = await oauthStore.allEntries().catch(() => []);
+              const oauthAccessToken = oauthEntries.find((e) => e.tokens?.access_token)?.tokens
+                ?.access_token;
+
+              let refreshCredential: string | undefined;
+              let refreshViaOAuth = false;
+              if (currentState.authState === "authenticated" && currentState.apiKey) {
+                refreshCredential = currentState.apiKey;
+              } else if (oauthAccessToken) {
+                refreshCredential = oauthAccessToken;
+                refreshViaOAuth = true;
+              }
+
+              if (refreshCredential) {
                 try {
-                  const succeeded = await onRefreshSearchConfig(currentState.apiKey);
-                  cloudVerified = succeeded;
-                  searchConfigRefreshed = succeeded;
-                  // (updateSearchTool and sendToolListChanged are now handled by onRefreshSearchConfig)
+                  // onOAuthLogin is the same re-pull with the OAuth bearer and
+                  // skipLogoutOn401, so a rejected token cannot log the user out.
+                  const succeeded = refreshViaOAuth
+                    ? await onOAuthLogin?.(refreshCredential)
+                    : await onRefreshSearchConfig?.(refreshCredential);
+                  if (succeeded !== undefined) {
+                    cloudVerified = succeeded;
+                    searchConfigRefreshed = succeeded;
+                  }
+                  // (updateSearchTool and sendToolListChanged are handled by the hook)
                 } catch (err) {
                   logger.warn(`Status cloud refresh failed: ${String(err)}`);
                   cloudVerified = false;
@@ -331,8 +362,12 @@ export function registerAllTools(
 
               // Re-read state in case it was updated during refresh (e.g., logout on 401)
               const latestState = stateManager.getState();
+              // Unified state: authState is "authenticated" when EITHER credential
+              // domain is present (API key or OAuth tokens), so this reads true
+              // for OAuth-only sessions too.
               const safeState: Record<string, unknown> = {
                 authenticated: latestState.authState === "authenticated",
+                credential: latestState.credentialType,
                 email: latestState.email,
                 apiKeyMask: latestState.apiKeyMask,
               };
@@ -406,7 +441,8 @@ export function registerAllTools(
             }
 
             if (action === "start_oauth") {
-              const oauthTarget = target || "https://toolrator.org/mcp";
+              const configuredAuthUrl = searchConfigState?.authUrl?.replace(/\/+$/, "");
+              const oauthTarget = target || `${configuredAuthUrl || "https://toolrator.org"}/mcp`;
               try {
                 const flow = await oauthClient.startLogin(
                   oauthTarget,
@@ -414,17 +450,14 @@ export function registerAllTools(
                 );
 
                 if (flow.kind === "device") {
-                  // RFC 8628 background polling (same pattern as the legacy
-                  // device flow above): fast while the user is actively
-                  // confirming, then slow; stops on success/expiry/denial.
+                  // RFC 8628 background polling: fast while the user is
+                  // actively confirming, then slow; stops on
+                  // success/expiry/denial.
                   const flowStart = Date.now();
                   const pollDeadline = flowStart + 15 * 60 * 1000;
-                  // Honor the AS's RFC 8628 §3.2 interval when advertised,
-                  // floor 1s, never above the slow cadence.
-                  const oauthPollIntervalMs = Math.max(
-                    1_000,
-                    Math.min((flow.interval ?? 5) * 1_000, POLL_SLOW_INTERVAL_MS),
-                  );
+                  // Honor the AS's RFC 8628 §3.2 interval when advertised;
+                  // use the RFC's 5s default and enforce a 1s safety floor.
+                  let oauthPollIntervalMs = Math.max(1_000, (flow.interval ?? 5) * 1_000);
                   if (activePoller) clearTimeout(activePoller);
                   const scheduleNextOauthPoll = (delayMs: number) => {
                     activePoller = setTimeout(async () => {
@@ -435,7 +468,12 @@ export function registerAllTools(
                       }
                       try {
                         const poll = await oauthClient.pollDeviceGrantOnce();
-                        if (poll && poll !== "pending") {
+                        if (poll === "slow_down") {
+                          oauthPollIntervalMs += 5_000;
+                        } else if (poll === null) {
+                          activePoller = null;
+                          return;
+                        } else if (poll !== "pending") {
                           activePoller = null;
                           if (poll.tokens?.access_token) {
                             await applyPostLogin(poll.tokens.access_token, poll.issuer);
@@ -449,9 +487,10 @@ export function registerAllTools(
                         logger.info(`OAuth device flow ended: ${err?.message ?? String(err)}`);
                         return;
                       }
-                      const next = Date.now() - flowStart < POLL_FAST_WINDOW_MS
-                        ? Math.min(oauthPollIntervalMs, POLL_FAST_INTERVAL_MS)
-                        : oauthPollIntervalMs;
+                      const phaseMinimum = Date.now() - flowStart < POLL_FAST_WINDOW_MS
+                        ? POLL_FAST_INTERVAL_MS
+                        : POLL_SLOW_INTERVAL_MS;
+                      const next = Math.max(oauthPollIntervalMs, phaseMinimum);
                       scheduleNextOauthPoll(next);
                     }, delayMs);
                   };
@@ -460,7 +499,7 @@ export function registerAllTools(
                   return {
                     content: [{
                       type: "text" as const,
-                      text: `${flow.instructions}\n\nThe connector polls in the background and finishes automatically; no further action is needed from you.`,
+                      text: flow.instructions,
                     }],
                   };
                 }
@@ -511,125 +550,21 @@ export function registerAllTools(
                 clearTimeout(activePoller);
                 activePoller = null;
               }
-              authClient.clearApiKey();
+              // One session concept: logout clears BOTH credential domains and
+              // any in-flight OAuth login.
+              try {
+                const entries = await oauthStore.allEntries();
+                for (const e of entries) {
+                  await oauthClient.revoke(e.issuer, e.target);
+                }
+                await oauthStore.clearPendingGrant();
+              } catch (err) {
+                logger.warn(`OAuth cleanup during logout failed: ${String(err)}`);
+              }
               await stateManager.logout(configDir);
               return {
-                content: [{ type: "text" as const, text: "Logged out successfully." }],
+                content: [{ type: "text" as const, text: "Logged out successfully. API key and OAuth tokens cleared." }],
               };
-            }
-
-            if (action === "start_device_flow") {
-              try {
-                const flow = await authClient.startDeviceFlow();
-                stateManager.beginDeviceFlow(flow.device_code, flow.user_code, flow.verification_uri, flow.expires_in);
-
-                if (activePoller) {
-                  clearTimeout(activePoller);
-                }
-
-                const flowStart = Date.now();
-                const expireTime = flowStart + flow.expires_in * 1000;
-
-                // Adaptive background polling: fast (10s) for the first minute
-                // while the user is actively confirming, then slow (60s) until
-                // the flow expires, completes, or is cleared.
-                const scheduleNextPoll = (delayMs: number) => {
-                  activePoller = setTimeout(async () => {
-                    if (Date.now() > expireTime) {
-                      activePoller = null;
-                      await stateManager.logout(configDir);
-                      return;
-                    }
-
-                    try {
-                      const poll = await authClient.pollDeviceFlow(flow.device_code);
-                      if (poll.status === "success" && poll.api_key) {
-                        activePoller = null;
-
-                        authClient.setApiKey(poll.api_key);
-                        await stateManager.completeAuthentication(
-                          configDir,
-                          poll.api_key,
-                          poll.email || "",
-                        );
-                        return;
-                      }
-                      if (poll.status === "expired") {
-                        activePoller = null;
-                        await stateManager.logout(configDir);
-                        return;
-                      }
-                    } catch {
-                      // ignore transient polling errors
-                    }
-
-                    const elapsed = Date.now() - flowStart;
-                    const delay = elapsed < POLL_FAST_WINDOW_MS ? POLL_FAST_INTERVAL_MS : POLL_SLOW_INTERVAL_MS;
-                    scheduleNextPoll(delay);
-                  }, delayMs);
-                };
-
-                scheduleNextPoll(POLL_FAST_INTERVAL_MS);
-
-                return {
-                  content: [{
-                    type: "text" as const,
-                    text: `Device flow initiated successfully.\n\n` +
-                      `Instructions:\n` +
-                      `1. Open: ${flow.verification_uri}\n` +
-                      `2. Enter the code: ${flow.user_code}\n\n` +
-                      `The connector will poll in the background automatically. ` +
-                      `Pass device_code: "${flow.device_code}" to poll_device_flow to check manually.`
-                  }]
-                };
-              } catch (err) {
-                const baseText = String(err);
-                const resolvedHint = `(tried ${authClient.upstreamUrl})`;
-                return {
-                  content: [{
-                    type: "text" as const,
-                    text: `Failed to start device flow ${resolvedHint}: ${baseText}`,
-                  }],
-                  isError: true,
-                };
-              }
-            }
-
-            if (action === "poll_device_flow") {
-              const code = device_code || currentState.deviceCode;
-              if (!code) {
-                return {
-                  content: [{ type: "text" as const, text: "device_code is required for poll_device_flow." }],
-                  isError: true,
-                };
-              }
-
-              try {
-                const poll = await authClient.pollDeviceFlow(code);
-                if (poll.status === "success" && poll.api_key) {
-                  if (activePoller) {
-                    clearTimeout(activePoller);
-                    activePoller = null;
-                  }
-                  authClient.setApiKey(poll.api_key);
-                  await stateManager.completeAuthentication(
-                    configDir,
-                    poll.api_key,
-                    poll.email || "",
-                  );
-                  return {
-                    content: [{ type: "text" as const, text: `Successfully authenticated as ${poll.email}.` }],
-                  };
-                }
-                return {
-                  content: [{ type: "text" as const, text: `Device flow status: ${poll.status}` }],
-                };
-              } catch (err) {
-                return {
-                  content: [{ type: "text" as const, text: `Poll error: ${String(err)}` }],
-                  isError: true,
-                };
-              }
             }
 
             return {
@@ -639,67 +574,6 @@ export function registerAllTools(
           });
 
   // =========================================================================
-  // 6. Manage Bookmarked Favorites
-  // =========================================================================
-
-  server.registerTool(
-    "manage_favorites",
-    {
-      description: describeManageFavorites(),
-      inputSchema: z.object({
-        action: z.enum(["list", "add", "remove"]).describe("The favorites action to perform"),
-        target: z.string().optional()
-          .describe("Server target to add/remove (external http(s) URL). Required for add/remove"),
-        notes: z.string().optional()
-          .describe("Free-text notes to remember about this server (add only)"),
-      })
-    },
-    async ({ action, target, notes }) => {
-              try {
-                if (action === "list") {
-                  const favorites = await listFavoritesWithDetails(configDir, logger);
-                  return {
-                    content: [{ type: "text" as const, text: JSON.stringify(favorites, null, 2) }],
-                  };
-                }
-
-                if (!target) {
-                  return {
-                    content: [{ type: "text" as const, text: "target parameter is required for add/remove." }],
-                    isError: true,
-                  };
-                }
-
-                if (action === "add") {
-                  await addFavorite(configDir, target, notes, logger);
-                  return {
-                    content: [{ type: "text" as const, text: `Successfully bookmarked "${target}".` }],
-                  };
-                }
-
-                if (action === "remove") {
-                  const removed = await removeFavorite(configDir, target, logger);
-                  if (removed) {
-                    return {
-                      content: [{ type: "text" as const, text: `Successfully removed "${target}" from bookmarks.` }],
-                    };
-                  } else {
-                    return {
-                      content: [{ type: "text" as const, text: `Bookmark "${target}" not found.` }],
-                    };
-                  }
-                }
-
-                return {
-                  content: [{ type: "text" as const, text: "Invalid favorites action." }],
-                  isError: true,
-                };
-              } catch (err) {
-                return formatErrorResponse(createStructuredError("execution_failed", { reason: String(err) }));
-              }
-            });
-
-  // =========================================================================
   // State Change Notification Updates
   // =========================================================================
 
@@ -707,31 +581,11 @@ export function registerAllTools(
     const currentState = stateManager.getState();
     searchTool.update({ description: describeSearchMcpEcosystem(currentState, registry) });
     mcpServerTool.update({ description: describeMcpServer(currentState) });
-    const authActionEnum = currentState.authState === "authenticated"
-      ? z.enum(["status", "logout", "oauth_status", "oauth_logout"])
-      : z.enum(["status", "start_device_flow", "poll_device_flow", "start_oauth", "complete_oauth", "oauth_status"]);
-
-    const newSchema = z.object({
-      action: authActionEnum.describe("The auth action to perform"),
-      device_code: z.string().optional().describe("Required for 'poll_device_flow'"),
-      target: z.string().optional()
-        .describe("For 'start_oauth': the MCP server URL to authenticate against. Default: the Toolrator cloud"),
-      scopes: z.array(z.string()).optional()
-        .describe("For 'start_oauth': OAuth scopes to request. Default covers Toolrator search engines"),
-      redirect_url: z.string().optional()
-        .describe("Required for 'complete_oauth' — the full post-approval redirect URL to paste back"),
-    });
-
-    // @ts-ignore - Ignore if inputSchema update is not explicitly typed
-    authTool.update({ 
-      description: describeManageAuth(currentState, searchConfigState),
-      inputSchema: newSchema,
-      paramsSchema: newSchema
-    } as any);
-    registerCurrentSchema("manage_auth", newSchema);
+    // Auth actions are fixed at registration; only the description changes.
+    authTool.update({ description: describeManageAuth(currentState, searchConfigState) });
   });
 
-  logger.debug("All 4 unified tools registered");
+  logger.debug("All 3 unified tools registered");
   return {
     updateSearchTool: () => {
       schemaTimestamps.lastUpdated = Date.now();

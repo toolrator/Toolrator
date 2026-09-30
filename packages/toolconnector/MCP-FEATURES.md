@@ -2,7 +2,7 @@
 
 > **Protocol**: MCP 2026-07-28 (Official — released 2026-07-28)  
 > **SDK**: `@modelcontextprotocol/server` + `@modelcontextprotocol/client` v2 (pinned `^2.0.0-beta.3` in `package.json`)  
-> **Last updated**: 2026-08-18
+> **Last updated**: 2026-09-30
 
 This document tracks every MCP 2026-07-28 protocol feature and whether it is implemented in the toolconnector. The toolconnector acts as both:
 - An **MCP Server** (exposed to the AI agent via stdio)
@@ -26,12 +26,12 @@ This document tracks every MCP 2026-07-28 protocol feature and whether it is imp
 
 | # | Feature | Spec Ref | Status | Location | Notes |
 |---|---------|----------|--------|----------|-------|
-| 1.1 | Remove `initialize` / `initialized` handshake | SEP-2575 | ✅ | `mcp-connection.ts` | v2 SDK handles this. Connected with `versionNegotiation: { mode: 'auto' }`. |
-| 1.2 | `_meta` on every request (protocolVersion, clientInfo, clientCapabilities) | SEP-2575 | ✅ | `mcp-connection.ts` | v2 SDK attaches `_meta` automatically when negotiation is active. |
-| 1.3 | Remove `Mcp-Session-Id` header | SEP-2567 | ✅ | `mcp-connection.ts` | We never relied on session IDs — connections are stateless. |
-| 1.4 | `server/discover` RPC | SEP-2575 | ✅ | `mcp-connection.ts` | Negotiated via `mode: 'auto'` which executes probe. |
+| 1.1 | Remove `initialize` / `initialized` handshake | SEP-2575 | ✅ | `mcp-client.ts` | v2 SDK handles this. Connected with `versionNegotiation: { mode: 'auto' }`. |
+| 1.2 | `_meta` on every request (protocolVersion, clientInfo, clientCapabilities) | SEP-2575 | ✅ | `mcp-client.ts` | v2 SDK attaches `_meta` automatically when negotiation is active. |
+| 1.3 | Remove `Mcp-Session-Id` header | SEP-2567 | ✅ | `mcp-client.ts` | We never relied on session IDs — connections are stateless. |
+| 1.4 | `server/discover` RPC | SEP-2575 | ✅ | `mcp-client.ts` | Negotiated via `mode: 'auto'` which executes probe. |
 | 1.5 | `UnsupportedProtocolVersionError` on version mismatch | SEP-2575 | ✅ | `errors.ts` | Detected and classified. |
-| 1.6 | Version negotiation with legacy (2025-11-25) servers | — | ✅ | `mcp-connection.ts` | Handled automatically by v2 SDK fallback. |
+| 1.6 | Version negotiation with legacy (2025-11-25) servers | — | ✅ | `mcp-client.ts` | Handled automatically by v2 SDK fallback. |
 
 ---
 
@@ -39,11 +39,11 @@ This document tracks every MCP 2026-07-28 protocol feature and whether it is imp
 
 | # | Feature | Spec Ref | Status | Location | Notes |
 |---|---------|----------|--------|----------|-------|
-| 2.1 | Streamable HTTP transport (primary) | — | ✅ | `mcp-connection.ts` | Already the primary transport. |
-| 2.2 | `Mcp-Method` and `Mcp-Name` request headers | SEP-2243 | ✅ | `mcp-connection.ts` | Added automatically by SDK v2. |
+| 2.1 | Streamable HTTP transport (primary) | — | ✅ | `mcp-client.ts` | Already the primary transport. |
+| 2.2 | `Mcp-Method` and `Mcp-Name` request headers | SEP-2243 | ✅ | `mcp-client.ts` | Added automatically by SDK v2. |
 | 2.3 | `x-mcp-header` custom headers from tool parameters | SEP-2243 | ➖ | — | Server-side concern; not applicable to a client. The connector never advertises tool parameters that map to `x-mcp-header` upstream, so it never sends `Mcp-Param-*` headers (the `headers` tool parameter forwards ordinary HTTP headers instead). |
-| 2.4 | Remove SSE stream resumability (`Last-Event-ID`) | SEP-2575 | ✅ | `mcp-connection.ts` | We don't use SSE resumability. |
-| 2.5 | SSE transport (deprecated, 12-month window) | SEP-2596 | ✅ | `mcp-connection.ts` | Supported as fallback. Will be removed when deprecated period ends. |
+| 2.4 | Remove SSE stream resumability (`Last-Event-ID`) | SEP-2575 | ✅ | `mcp-client.ts` | We don't use SSE resumability. |
+| 2.5 | SSE transport (deprecated, 12-month window) | SEP-2596 | ✅ | `mcp-client.ts` | Supported as fallback. Will be removed when deprecated period ends. |
 
 ---
 
@@ -51,7 +51,7 @@ This document tracks every MCP 2026-07-28 protocol feature and whether it is imp
 
 | # | Feature | Spec Ref | Status | Location | Notes |
 |---|---------|----------|--------|----------|-------|
-| 3.1 | Stateless connections (no session-bound state) | SEP-2567 | ✅ | `external-client.ts` | Stateless — each call opens/closes a fresh connection. |
+| 3.1 | Stateless connections (no session-bound state) | SEP-2567 | ✅ | `mcp-client.ts` | Stateless — each call opens/closes a fresh connection. |
 | 3.2 | Explicit tool-minted handles (basket_id, etc.) | SEP-2567 | ✅ | — | Transparent to the toolconnector — handles are just tool arguments. |
 
 ---
@@ -60,9 +60,9 @@ This document tracks every MCP 2026-07-28 protocol feature and whether it is imp
 
 | # | Feature | Spec Ref | Status | Location | Notes |
 |---|---------|----------|--------|----------|-------|
-| 4.1 | `ttlMs` on list responses | SEP-2549 | ✅ | `cache.ts` | Cached in-memory and evicts properly. |
-| 4.2 | `cacheScope` ("public" / "private") | SEP-2549 | ✅ | `cache.ts` | Respects cache scope. |
-| 4.3 | Client-side cache for `tools/list` | SEP-2549 | ✅ | `external-client.ts` | Bypasses connect step entirely when cache is warm. |
+| 4.1 | `ttlMs` on list responses | SEP-2549 | ✅ | `mcp-client.ts` | Cached in-memory and evicts properly. |
+| 4.2 | `cacheScope` ("public" / "private") | SEP-2549 | ✅ | `mcp-client.ts` | Received but not branched on: the cache is in-memory and per-process, so a "private" result is still safe to keep for the life of that process. |
+| 4.3 | Client-side cache for `tools/list` | SEP-2549 | ✅ | `mcp-client.ts` | Bypasses connect step entirely when cache is warm. |
 | 4.4 | `traceparent` / `tracestate` / `baggage` in `_meta` | SEP-414 | ➖ | — | OpenTelemetry propagation. Not implemented (optional). |
 
 ---
@@ -71,10 +71,10 @@ This document tracks every MCP 2026-07-28 protocol feature and whether it is imp
 
 | # | Feature | Spec Ref | Status | Location | Notes |
 |---|---------|----------|--------|----------|-------|
-| 5.1 | Detect `resultType: "input_required"` from `tools/call` | SEP-2322 | ✅ | `external-client.ts` | Using low-level client `request` and `allowInputRequired: true`. |
+| 5.1 | Detect `resultType: "input_required"` from `tools/call` | SEP-2322 | ✅ | `mcp-client.ts` | Using low-level client `request` and `allowInputRequired: true`. |
 | 5.2 | Format `inputRequests` for the AI agent | SEP-2322 | ✅ | `tools.ts` | Surfaces elicitation questions as tool result. |
 | 5.3 | Accept `requestState` + `inputResponses` on retry | SEP-2322 | ✅ | `tools.ts` | Exposed via `mcp_server` passthrough — `tools/call` with `params { requestState, inputResponses }`. |
-| 5.4 | Pass `inputResponses` + `requestState` to `tools/call` | SEP-2322 | ✅ | `external-client.ts` | Passed into client request parameters on retry. |
+| 5.4 | Pass `inputResponses` + `requestState` to `tools/call` | SEP-2322 | ✅ | `mcp-client.ts` | Passed into client request parameters on retry. |
 | 5.5 | `resultType: "complete"` on all normal results | SEP-2322 | ✅ | `tools.ts` | Treated properly. |
 
 ---
@@ -83,7 +83,7 @@ This document tracks every MCP 2026-07-28 protocol feature and whether it is imp
 
 | # | Feature | Spec Ref | Status | Location | Notes |
 |---|---------|----------|--------|----------|-------|
-| 6.1 | Advertise `io.modelcontextprotocol/tasks` in client capabilities | SEP-2663 | ✅ | `mcp-connection.ts` | Configured `capabilities: { tasks: {} }`. |
+| 6.1 | Advertise `io.modelcontextprotocol/tasks` in client capabilities | SEP-2663 | ✅ | `mcp-client.ts` | Configured `capabilities: { tasks: {} }`. |
 | 6.2 | `tasks/get` (poll task status) | SEP-2663 | ✅ | `tools.ts` | Exposed via `mcp_server` passthrough (`method: "tasks/get"`). |
 | 6.3 | `tasks/update` (send input to running task) | SEP-2663 | ✅ | `tools.ts` | Exposed via `mcp_server` passthrough (`method: "tasks/update"`, `params { taskId, status }`). |
 | 6.4 | `tasks/cancel` (cancel running task) | SEP-2663 | ✅ | `tools.ts` | Exposed via `mcp_server` passthrough (`method: "tasks/cancel"`). |
@@ -105,9 +105,12 @@ This document tracks every MCP 2026-07-28 protocol feature and whether it is imp
 ## 8. Authorization
 
 Toolconnector is an OAuth 2.1 **client** (see [`OAUTH.md`](./OAUTH.md) for the
-grant-type explainer). Legacy API-key auth (device flow → `verify-key`) still
-works unchanged; OAuth tokens are also accepted by upstreams that front
-`verify-key` / `config/auto`.
+grant-type explainer). OAuth 2.1 is the only interactive login (device grant
+RFC 8628, or authorization-code + PKCE paste-back); the legacy Toolrator-specific
+API-key device flow was removed. API keys remain valid as a machine credential —
+`CONNECTOR_API_KEY` in the environment, or a `credentials.json` in the config dir
+(read-only: the removed flow was its only writer). Both credential domains are
+accepted by upstreams that front `verify-key` / `config/auto`.
 
 | # | Feature | Spec Ref | Status | Location | Notes |
 |---|---------|----------|--------|----------|-------|
@@ -152,7 +155,7 @@ works unchanged; OAuth tokens are also accepted by upstreams that front
 | 11.1 | Roots (deprecated) | SEP-2577 | ➖ | — | We don't use Roots. |
 | 11.2 | Sampling (deprecated) | SEP-2577 | ➖ | — | We don't use Sampling. |
 | 11.3 | Logging (deprecated) | SEP-2577 | ➖ | — | We don't use the MCP Logging feature. |
-| 11.4 | HTTP+SSE transport (deprecated) | SEP-2596 | ✅ | `mcp-connection.ts` | Supported as fallback. |
+| 11.4 | HTTP+SSE transport (deprecated) | SEP-2596 | ✅ | `mcp-client.ts` | Supported as fallback. |
 
 ---
 
@@ -164,8 +167,8 @@ works unchanged; OAuth tokens are also accepted by upstreams that front
 | 12.2 | `McpServer.tool()` → `registerTool()` | ✅ | `tools.ts` | Handled properly with standard schema. |
 | 12.3 | `McpError` → JSON-RPC error classification | ✅ | `errors.ts` | Uses standard JSON-RPC error codes and structured error mapping. |
 | 12.4 | `StdioServerTransport` → `@modelcontextprotocol/server/stdio` | ✅ | `index.ts` | Updated. |
-| 12.5 | `Client` → `@modelcontextprotocol/client` | ✅ | `mcp-connection.ts` | Updated. |
-| 12.6 | `SSEClientTransport` (deprecated) | ✅ | `mcp-connection.ts` | Kept as a client fallback for legacy servers; to be removed when the deprecation window ends. |
+| 12.5 | `Client` → `@modelcontextprotocol/client` | ✅ | `mcp-client.ts` | Updated. |
+| 12.6 | `SSEClientTransport` (deprecated) | ✅ | `mcp-client.ts` | Kept as a client fallback for legacy servers; to be removed when the deprecation window ends. |
 | 12.7 | `zod ^3.23.0` → `zod ^4.2.0` | ✅ | `package.json`, `tools.ts` | Updated to Zod v4. |
 | 12.8 | Handler context argument | ✅ | `tools.ts` | SDK v2 passes a context argument; this codebase still names it `extra` in tool handlers. |
 
