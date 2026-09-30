@@ -68,7 +68,7 @@ export function summarizeToolconnector(args: {
       return {
         pillClass: "status-bad",
         label: `Last verify-key failed · ${tc}${args.lastErrorReason ? ` · ${args.lastErrorReason}` : ""}`,
-        sub: "Run /device to re-authorize.",
+        sub: "Set CONNECTOR_API_KEY to authorize.",
       };
     case "never":
     default:
@@ -93,7 +93,7 @@ export interface GlobalStatus {
 
 export interface LayoutOptions {
   title: string;
-  active?: "landing" | "toolconnector" | "search" | "search-admin" | "device";
+  active?: "landing" | "toolconnector" | "search" | "search-admin";
   body: string;
   globalStatus?: GlobalStatus;
 }
@@ -140,7 +140,6 @@ export const layout = (opts: LayoutOptions): string => `<!doctype html>
       <a href="/panel/toolconnector" class="nav-link ${opts.active === "toolconnector" ? "is-active" : ""}">Toolconnector</a>
       <a href="/panel/search" class="nav-link ${opts.active === "search" ? "is-active" : ""}">Search</a>
       <a href="/panel/search/admin" class="nav-link ${opts.active === "search-admin" ? "is-active" : ""}">Search Admin</a>
-      <a href="/device" class="nav-link ${opts.active === "device" ? "is-active" : ""}">Device Flow</a>
     </nav>
     <div class="sidebar-foot">
       <div class="pill pill-muted">open template</div>

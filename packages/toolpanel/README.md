@@ -2,13 +2,15 @@
 
 A small, open-source, self-hostable **control panel** for the [toolconnector](../toolconnector) and [Toolhub](../toolhub). It is a drop-in replacement for the upstream SaaS endpoint — point your toolconnector's `CONNECTOR_UPSTREAM_URL` at toolpanel, and your local AI agent gets its discovery configuration from this panel instead of the upstream SaaS.
 
-Toolpanel is intentionally **lightweight**: a single Node process, Hono HTTP server, server-rendered HTML, zero database, zero build pipeline besides `tsc`. It mirrors only the **communication surface** toolconnector actually consumes (auth/device-flow, verify-key, search-engine config, the canonical search schema, and the implicit-default search proxy) plus a simple admin UI for Toolhub.
+Toolpanel is intentionally **lightweight**: a single Node process, Hono HTTP server, server-rendered HTML, zero database, zero build pipeline besides `tsc`. It mirrors only the **communication surface** toolconnector actually consumes (verify-key, search-engine config, the canonical search schema, and the implicit-default search proxy) plus a simple admin UI for Toolhub.
 
 > **⚠️ Local-only by design.** Toolpanel ships with **no authentication**. The HTTP server binds to `127.0.0.1` by default. Do **not** bind it to a public interface (`HOST=0.0.0.0`). The README and server logs repeat this warning. This project is a template — add a reverse proxy + auth if you need anything more.
 
 ## 🟢 Project Status
 
-**v0.2.0** — Runtime dependency refresh: `@hono/node-server` 2.x, `zod` 4.6.x, `@types/node` 26, and `"types": ["node"]` declared explicitly in the tsconfig. No functional API changes.
+**Previous v0.2.0** — Runtime dependency refresh: `@hono/node-server` 2.x, `zod` 4.6.x, `@types/node` 26, and `"types": ["node"]` declared explicitly in the tsconfig. That release had no functional API changes.
+
+**v0.3.0** — removes the legacy device-flow endpoints and `/device` page. The panel remains a local configuration and administration service without authentication or an OAuth authorization server.
 
 ---
 
@@ -33,7 +35,7 @@ Then point toolconnector at toolpanel:
 ```bash
 # In the shell that runs toolconnector:
 export CONNECTOR_UPSTREAM_URL=http://127.0.0.1:7800
-# (optional) skip the device flow by providing a literal key — toolpanel accepts any non-empty bearer
+# machine credential — toolpanel accepts any non-empty bearer
 export CONNECTOR_API_KEY=toolpanel-local
 npx -y @toolrator/toolconnector
 ```
@@ -110,23 +112,16 @@ Document schema (per the [Toolhub README](../toolhub/README.md)):
 
 ---
 
-## Auth / Device flow (toolconnector ↔ toolpanel)
+## Auth (toolconnector ↔ toolpanel)
 
-toolconnector's `manage_auth` tool implements the [device flow](../toolconnector/README.md#-timed-passwordless-device-flow-auth). Toolpanel implements the server side:
+The connector supports OAuth login against remote authorization servers, but
+Toolpanel does **not** implement an OAuth authorization server or interactive
+login. Its legacy device-flow endpoints were removed. For local use, configure
+a non-empty machine credential in the connector's environment. Toolpanel keeps
+the contract surface the connector needs on every boot:
 
 ```
-Agent: manage_auth action=start_device_flow
-  → POST http://127.0.0.1:7800/api/auth/device/start
-  ← { verification_uri, user_code, device_code, expires_in: 1800 }
-Agent prints the URL + user_code, then polls:
-  → POST /api/auth/device/poll { device_code }
-  ← { status: "pending" }   (repeat every 60s, up to expiry)
-Human opens verification_uri in a browser → submits the user_code
-  → POST /api/auth/device/confirm { user_code }
-  ← { success: true }
-Agent polls again:
-  ← { status: "success", api_key: "toolpanel-local", email: "local@toolpanel" }
-Connector persists credentials.json, then on every boot:
+Connector boot / every credential change:
   → POST /api/auth/verify-key   (Authorization: Bearer ...)
   ← { valid: true, user: { ... } }   (open mode: any non-empty bearer)
   → GET  /api/connector/config/auto   (Authorization: Bearer ...)
@@ -134,18 +129,6 @@ Connector persists credentials.json, then on every boot:
 ```
 
 Because toolpanel is unauthenticated, `verify-key` accepts any non-empty bearer and `connector/config/auto` always returns the current `search-engines.json`. The connector can therefore run end-to-end locally without any real account.
-
-### The `/device` page
-
-The verification_uri points to `/device`, a single-purpose confirmation page:
-
-- **Two-slot input** — one box for the 4 letters, one for the 4 digits, with the `-` separator baked in visually.
-- **Auto-uppercase**, **auto-strip** of any non-alphanumeric character, **auto-tab** from the letters slot to the digits slot when full, and **backspace-wrap** back to the letters slot.
-- **Paste anywhere** — pasting `ABCD-1234`, `abcd1234`, or `AB-CD-12-34` fills both slots and jumps to the submit button.
-- **One-tap Paste button** reads the clipboard, fills the slots, and focuses submit.
-- **Real-time validation** — green ring when both halves are valid, red ring while the user types something malformed.
-- **Lifecycle confirmation** after submit: *Waiting for your AI agent to poll…* with a pulsing indigo dot, then *Confirmed — your toolconnector is authorized* with a green dot. Polls `GET /api/auth/device/status?user_code=…` every 4 s.
-- **URL pre-fill**: visiting `/device?user_code=ABCD-1234` fills both slots automatically (so a future toolconnector could embed its own code in the verification_uri).
 
 `GET /api/status` (and the landing card) report whether a toolconnector has actually been seen recently — `toolconnector authorized · last verify-key 12s ago` once a boot completes — so you can tell at a glance whether the connector on your machine is really pointed here.
 
@@ -188,8 +171,8 @@ The probe path is published here as a stable contract — do not rename it witho
 |---|---|---|
 | `PORT` | `7800` | HTTP server port |
 | `HOST` | `127.0.0.1` | Bind address. **Do not** set `0.0.0.0` (panel is unauthenticated). |
-| `TOOLPANEL_PUBLIC_URL` | `http://127.0.0.1:$PORT` | Used to build `verification_uri` returned to toolconnector. |
-| `TOOLPANEL_CONFIG_DIR` | `./toolpanel-config` | Where `search-engines.json` and `device-codes.json` are stored. |
+| `TOOLPANEL_PUBLIC_URL` | `http://127.0.0.1:$PORT` | Public URL advertised by the panel. |
+| `TOOLPANEL_CONFIG_DIR` | `./toolpanel-config` | Where `search-engines.json` is stored. |
 | `SEARCH_ENGINE_BASE_URL` | `http://127.0.0.1:7600` | Upstream Toolhub URL. |
 | `SEARCH_ADMIN_TOKEN` | `dev-admin-token` | Bearer token for upstream `/admin/*` calls. Must match the search engine's `SEARCH_ADMIN_TOKEN`. |
 | `CONNECTOR_API_KEY` | _(unset)_ | If set, advertised in the panel UI as a ready-to-use API key for toolconnector. |
@@ -207,9 +190,7 @@ The probe path is published here as a stable contract — do not rename it witho
 │  /panel/toolconnector  search-engines.json CRUD             │
 │  /panel/search          public search (proxy)                │
 │  /panel/search/admin    MCP server admin (proxy)            │
-│  /device                device-flow code entry page         │
 │                                                              │
-│  /api/auth/device/{start,poll,confirm}  ◀──── toolconnector │
 │  /api/auth/verify-key                                            │
 │  /api/connector/config          (GET/PUT)                       │
 │  /api/connector/config/auto     (GET)                           │

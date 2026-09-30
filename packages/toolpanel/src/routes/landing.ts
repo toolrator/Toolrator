@@ -37,7 +37,7 @@ function toolconnectorPill(w: Awaited<ReturnType<typeof getWhoami>>): string {
         <span class="status ${pillClass(w.state)}">
           Last verify-key failed &middot; ${escape(relTimeAgo(w.lastErrorAt ?? w.lastVerifyKeyAt))}${w.lastErrorReason ? ` &middot; ${escape(w.lastErrorReason)}` : ""}
         </span>
-        <span class="kv-sub muted" style="margin-top: 0;">Run <a href="/device">/device</a> to re-authorize, or check your <code>CONNECTOR_API_KEY</code>.</span>
+        <span class="kv-sub muted" style="margin-top: 0;">Check your <code>CONNECTOR_API_KEY</code>, then restart the connector.</span>
       </div>`;
     case "never":
     default:
@@ -106,7 +106,7 @@ landing.get("/", async (c) => {
         <div class="kv"><span class="k">Running at</span><code>${escape(config.publicUrl)}</code></div>
         <div class="kv">
           <span class="k">CONNECTOR_API_KEY</span>
-          <code>${config.apiKey ? "set" : "unset (using open device-flow)"}</code>
+          <code>${config.apiKey ? "set" : "unset"}</code>
         </div>
         ${searchEngineStatus}
         <div class="kv"><span class="k">Toolconnector</span>${tcStatus}</div>

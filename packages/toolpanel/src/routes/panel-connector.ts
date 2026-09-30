@@ -44,8 +44,8 @@ panelConnector.get("/panel/toolconnector", async (c) => {
     <section class="card">
       <h2>API key</h2>
       <p class="muted">${process.env.CONNECTOR_API_KEY
-        ? "Environment variable <code>CONNECTOR_API_KEY</code> is set. toolconnector can use it directly to skip the device flow."
-        : "No <code>CONNECTOR_API_KEY</code> in the panel's env. toolconnector will be forced to use the device flow at <a href=\"/device\">/device</a>."}</p>
+        ? "Environment variable <code>CONNECTOR_API_KEY</code> is set. toolconnector uses it directly as its machine credential."
+        : "No <code>CONNECTOR_API_KEY</code> in the panel's env. toolconnector logs in with OAuth 2.1 (<code>manage_auth action: start_oauth</code>)."}</p>
     </section>`;
 
   const whoamiStatePill = (() => {
@@ -76,7 +76,7 @@ panelConnector.get("/panel/toolconnector", async (c) => {
         <div class="kv"><span class="k">Last auto-pull</span><code>${whoami.lastAutoPullAt ? new Date(whoami.lastAutoPullAt).toISOString() : "—"}</code>${whoami.lastAutoPullAt ? ` <span class="muted hint"> &middot; ${whoami.lastEngineCount ?? 0} engines returned</span>` : ""}</div>
         ${whoami.lastErrorReason ? `<div class="kv"><span class="k">Last error</span><code>${escape(whoami.lastErrorReason)}</code> <span class="muted hint">at ${whoami.lastErrorAt ? new Date(whoami.lastErrorAt).toISOString() : "—"}</span></div>` : ""}
       </div>
-      <p class="muted hint" style="margin-top:10px">Authorizing another connector is one click: <a href="/device">/device</a> (the panel's open device-flow page).</p>
+      <p class="muted hint" style="margin-top:10px">Authorization is per-connector: OAuth 2.1 (<code>start_oauth</code>) for interactive login, or <code>CONNECTOR_API_KEY</code> as the machine credential.</p>
     </section>`;
 
   const body = `

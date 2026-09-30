@@ -17,7 +17,6 @@ async function writeJson(path: string, value: unknown): Promise<void> {
 }
 
 const pathEngines = join(config.configDir, "search-engines.json");
-const pathDevice = join(config.configDir, "device-codes.json");
 
 export const SearchEngineAuthSchema = z
   .object({
@@ -77,37 +76,6 @@ export async function writeSearchEngines(engines: SearchEngine[]): Promise<void>
   await writeJson(pathEngines, deduped);
 }
 
-const DeviceCodeSchema = z
-  .object({
-    deviceCode: z.string(),
-    userCode: z.string(),
-    status: z.enum(["pending", "confirmed"]).default("pending"),
-    expiresAt: z.number(),
-    createdAt: z.number(),
-    updatedAt: z.number(),
-  })
-  .strict();
-
-export type DeviceCode = z.infer<typeof DeviceCodeSchema>;
-
-export async function readDeviceCodes(): Promise<DeviceCode[]> {
-  const raw = await readJson<unknown[]>(pathDevice, []);
-  if (!Array.isArray(raw)) return [];
-  const out: DeviceCode[] = [];
-  for (const item of raw) {
-    const parsed = DeviceCodeSchema.safeParse(item);
-    if (parsed.success) out.push(parsed.data);
-  }
-  return out;
-}
-
-export async function writeDeviceCodes(codes: DeviceCode[]): Promise<void> {
-  await writeJson(pathDevice, codes);
-}
-
-export async function pruneExpiredDeviceCodes(): Promise<DeviceCode[]> {
-  const now = Date.now();
-  const fresh = (await readDeviceCodes()).filter((c) => c.expiresAt > now);
-  await writeDeviceCodes(fresh);
-  return fresh;
-}
+// The legacy device-codes store (device-codes.json) was removed along with
+// the legacy API-key device flow. Toolpanel keeps only the verify-key /
+// config-auto contract surface plus its admin UI.

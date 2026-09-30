@@ -128,24 +128,6 @@ export async function recordAutoPullOk(ok: boolean, engineCount: number): Promis
   } catch { /* ignore */ }
 }
 
-export async function recordDeviceStart(): Promise<void> {
-  try {
-    await writeWhoamiRaw({ lastEndpoints: ["/api/auth/device/start"] });
-  } catch { /* ignore */ }
-}
-
-export async function recordDevicePoll(): Promise<void> {
-  try {
-    await writeWhoamiRaw({ lastEndpoints: ["/api/auth/device/poll"] });
-  } catch { /* ignore */ }
-}
-
-export async function recordDeviceConfirm(): Promise<void> {
-  try {
-    await writeWhoamiRaw({ lastEndpoints: ["/api/auth/device/confirm"] });
-  } catch { /* ignore */ }
-}
-
 export async function getWhoami(): Promise<ToolconnectorStatus> {
   const w = await readWhoami();
   const now = Date.now();
