@@ -11,6 +11,7 @@ Package versions are independent; each version heading identifies its package an
 ### Changed
 
 - **Toolhub:** indexing swaps retain the active index on failure; embedding requests use bounded chunks, pooling, and retry handling.
+- Refreshed Toolhub's Hono lockfile to the patched release.
 - Baseline-update workflows check out `main` and rebase before pushing their generated changes.
 
 ## [`@toolrator/toolpanel` 0.3.0](https://github.com/toolrator/Toolrator/releases/tag/toolpanel-v0.3.0) - 2026-09-30
@@ -51,6 +52,7 @@ Package versions are independent; each version heading identifies its package an
   operator places in the config dir. `logout` still deletes it.
 
 - OAuth starts against the resolved upstream. Device-grant polling honors the server interval and `slow_down`, and stops on terminal errors.
+- Refreshed Hono and the development tooling lockfile to patched releases.
 
 ### Removed
 
