@@ -14,6 +14,14 @@ Package versions are independent; each version heading identifies its package an
 - Refreshed Toolhub's Hono lockfile to the patched release.
 - Baseline-update workflows check out `main` and rebase before pushing their generated changes.
 
+## [`@toolrator/toolconnector` 0.4.1](https://github.com/toolrator/Toolrator/releases/tag/toolconnector-v0.4.1) - 2026-09-30
+
+### Fixed
+
+- Explicitly enable MCP 2026-07-28 on the connector's stdio server. Current clients can use stateless `server/discover`; legacy clients retain the 2025-11-25 handshake.
+- Pin the client and server SDKs to stable 2.2.0 and use the SDK's stdio protocol entry.
+- Added regression checks for both stdio protocol paths.
+
 ## [`@toolrator/toolpanel` 0.3.0](https://github.com/toolrator/Toolrator/releases/tag/toolpanel-v0.3.0) - 2026-09-30
 
 ### Changed

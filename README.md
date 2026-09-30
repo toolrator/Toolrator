@@ -39,7 +39,7 @@
 > **The local-first discovery layer for AI agents.**  
 > `@toolrator/toolconnector` runs on your machine and bridges a stdio MCP client to search backends and external servers. Requests go to the endpoints you choose.
 
-> **Current interface:** Toolconnector 0.4.0 exposes three tools and OAuth login. Toolpanel 0.3.0 provides local configuration without the legacy device flow.
+> **Current interface:** Toolconnector 0.4.1 exposes three tools and OAuth login. Toolpanel 0.3.0 provides local configuration without the legacy device flow.
 
 <br/>
 
@@ -225,7 +225,7 @@ Add this to your MCP client configuration (Node.js ≥20):
   "mcpServers": {
     "toolconnector": {
       "command": "npx",
-      "args": ["-y", "@toolrator/toolconnector@0.4.0"]
+      "args": ["-y", "@toolrator/toolconnector@0.4.1"]
     }
   }
 }
@@ -275,7 +275,7 @@ Add to your MCP client config:
   "mcpServers": {
     "toolconnector": {
       "command": "npx",
-      "args": ["-y", "@toolrator/toolconnector@0.4.0"],
+      "args": ["-y", "@toolrator/toolconnector@0.4.1"],
       "env": {
         "TOOLPANEL_URL": "http://127.0.0.1:7800",
         "CONNECTOR_SEARCH_CONFIG_MODE": "toolpanel",

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
+import { StdioServerTransport, serveStdio } from "@modelcontextprotocol/server/stdio";
 import { McpServer } from "@modelcontextprotocol/server";
 import type { JSONRPCMessage } from "@modelcontextprotocol/server";
 import { loadConfig, Logger, shouldAutoProbePanel, TOOLCONNECTOR_VERSION, TOOLPANEL_PROBE_PATH, TOOLPANEL_PROBE_TIMEOUT_MS, type ToolconnectorConfig } from "./config.js";
@@ -44,6 +44,17 @@ import { isDeepStrictEqual } from "node:util";
  * snappy while covering a healthy network round-trip comfortably.
  */
 const BOOT_REMOTE_DEADLINE_MS = 4000;
+
+/** Serve current stateless stdio requests while retaining legacy client support. */
+export function createConnectorServer(): McpServer {
+  return new McpServer(
+    { name: "toolconnector", version: TOOLCONNECTOR_VERSION },
+    {
+      supportedProtocolVersions: ["2026-07-28", "2025-11-25"],
+      capabilities: { tools: { listChanged: true } },
+    },
+  );
+}
 
 async function main(): Promise<void> {
   // 1. Load configuration
@@ -215,17 +226,7 @@ async function main(): Promise<void> {
   }
 
   // 4. Create MCP server
-  const server = new McpServer(
-    {
-      name: "toolconnector",
-      version: TOOLCONNECTOR_VERSION,
-    },
-    {
-      capabilities: {
-        tools: { listChanged: true },
-      },
-    },
-  );
+  const server = createConnectorServer();
 
   // 5. Register all tools
   const { updateSearchTool } = registerAllTools(
@@ -263,7 +264,10 @@ async function main(): Promise<void> {
 
   // 7. Connect to stdio transport
   const transport = new StdioServerTransport();
-  await server.connect(transport);
+  serveStdio(() => server, {
+    transport,
+    onerror: error => logger.error("Stdio protocol error", error),
+  });
 
   // -----------------------------------------------------------------------
   // In-band schema-staleness compensation for harnesses that ignore

@@ -1,12 +1,16 @@
 # MCP Feature Compliance — Toolconnector
 
 > **Protocol**: MCP 2026-07-28 (Official — released 2026-07-28)  
-> **SDK**: `@modelcontextprotocol/server` + `@modelcontextprotocol/client` v2 (pinned `^2.0.0-beta.3` in `package.json`)  
+> **SDK**: `@modelcontextprotocol/server` + `@modelcontextprotocol/client` 2.2.0 (exact pins in `package.json`)  
 > **Last updated**: 2026-09-30
 
 This document tracks every MCP 2026-07-28 protocol feature and whether it is implemented in the toolconnector. The toolconnector acts as both:
 - An **MCP Server** (exposed to the AI agent via stdio)
 - An **MCP Client** (connects to remote MCP servers via HTTP)
+
+From 0.4.1, stdio uses the SDK's `serveStdio` entry to select current stateless
+requests or the legacy 2025-11-25 handshake. Both opening paths have regression
+coverage in `tests/stdio-protocol.test.ts`.
 
 ---
 
