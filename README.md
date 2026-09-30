@@ -37,7 +37,9 @@
 <!-- ==================== QUOTE ==================== -->
 
 > **The local-first discovery layer for AI agents.**  
-> `@toolrator/toolconnector` bridges any MCP-compatible AI client to search backends and external servers — all without leaving your machine.
+> `@toolrator/toolconnector` runs on your machine and bridges a stdio MCP client to search backends and external servers. Requests go to the endpoints you choose.
+
+> **Current interface:** Toolconnector 0.4.0 exposes three tools and OAuth login. Toolpanel 0.3.0 provides local configuration without the legacy device flow.
 
 <br/>
 
@@ -65,10 +67,10 @@
 | | |
 |---|---|
 | **🧠 MCP 2026-07-28 (official)** | Built on the stateless protocol revision — SEP-2575, MRTR, Tasks extension, Streamable HTTP |
-| **🔌 Zero-Config Setup** | `npx -y @toolrator/toolconnector` — one command, four tools, instant discovery |
+| **🔌 Local MCP Bridge** | Connect a stdio MCP client to remote servers and configured search engines |
 | **🔍 Typo-Tolerant Search** | MeiliSearch + ONNX hybrid vector search for finding MCP servers and tools |
-| **🏠 Self-Hostable** | Toolpanel + Toolhub run fully offline — no cloud dependency |
-| **📋 4-Tool Surface** | Minimal context window footprint: search, inspect/execute, auth, bookmarks |
+| **🏠 Self-Hostable** | Run Toolpanel + Toolhub locally; remote servers still need network access |
+| **📋 3-Tool Surface** | Search, inspect/execute, and authentication |
 | **🔄 Auto-Fallback** | Works with both `2026-07-28` and legacy `2025-11-25` servers |
 
 <br/>
@@ -81,7 +83,7 @@
 
 This repository publishes the open-source client and discovery infrastructure for the Model Context Protocol. Three packages, one ecosystem:
 
-> 🔐 **Authentication**: By default, the toolconnector uses `https://toolrator.org` as its upstream auth endpoint (device flow, API key verification, search config). Set `TOOLPANEL_URL=http://127.0.0.1:7800` to use a self-hosted toolpanel instead — no external dependency.
+> 🔐 **Authentication**: The default upstream is `https://toolrator.org`, with OAuth login and search configuration. Local Toolpanel provides configuration and accepts a non-empty machine credential; it does not implement an OAuth authorization server. Bind it only to loopback.
 
 <br/>
 
@@ -90,7 +92,7 @@ This repository publishes the open-source client and discovery infrastructure fo
 | Package | Type | Run | Description |
 | :--- | :--- | :--- | :--- |
 | **🔌 `toolconnector`** | NPM CLI & Library | `npx -y @toolrator/toolconnector` | Local stdio MCP bridge — connects AI agents to search backends and external MCP servers |
-| **🛠️ `toolpanel`** | NPM CLI & Package | `npx -y @toolrator/toolpanel` | Self-hosted control panel — auth device flow, search-engine config, admin UI |
+| **🛠️ `toolpanel`** | NPM CLI & Package | `npx -y @toolrator/toolpanel` | Local control panel — search-engine config and admin UI; no authentication |
 | **🔍 `toolhub`** | Server Package | `npm run dev` | Typo-tolerant + hybrid vector search engine — MeiliSearch or in-memory backend |
 
 </div>
@@ -115,7 +117,7 @@ This repository publishes the open-source client and discovery infrastructure fo
 [![Tests](https://img.shields.io/github/actions/workflow/status/toolrator/Toolrator/.github/workflows/toolconnector-ci.yml?style=flat-square&label=tests)](https://github.com/toolrator/Toolrator/actions)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
 
-**The universal MCP adapter.** A stdio server that exposes 4 unified tools to any MCP-compatible AI client:
+**The universal MCP adapter.** A stdio server that exposes 3 unified tools to any MCP-compatible AI client:
 
 </div>
 
@@ -125,8 +127,7 @@ This repository publishes the open-source client and discovery infrastructure fo
 | :--- | :--- | :--- |
 | `search_mcp_ecosystem` | Search registry for tools, resources, prompts | `engine`, `arguments` |
 | `mcp_server` | Generic JSON-RPC passthrough to any external MCP (list, call, fetch, tasks) | `target`, `method`, `params` |
-| `manage_auth` | Device-flow login & status | `action`, `device_code` |
-| `manage_favorites` | Bookmark servers with cross-session notes | `action`, `target`, `notes` |
+| `manage_auth` | OAuth login, status, and logout | `action`, `target`, `redirect_url` |
 | — | **MRTR support**, **Tasks extension**, **Pluggable search engines** | |
 
 <br/>
@@ -138,7 +139,7 @@ This repository publishes the open-source client and discovery infrastructure fo
 [![npm](https://img.shields.io/npm/v/@toolrator/toolpanel?style=flat-square&logo=npm)](https://www.npmjs.com/package/@toolrator/toolpanel)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
 
-**Drop-in replacement for the upstream SaaS endpoint.** Self-hosted control plane for toolconnector and toolhub.
+**Local control panel for toolconnector and toolhub.** Configure search engines and manage your own index. No built-in authentication; keep it on loopback.
 
 </div>
 
@@ -150,7 +151,6 @@ This repository publishes the open-source client and discovery infrastructure fo
 | Connector config | `/panel/toolconnector` | CRUD for search-engines.json |
 | Public search | `/panel/search` | Queries toolhub with faceted filters |
 | Search admin | `/panel/search/admin` | Index / edit / delete MCP servers |
-| Device flow | `/device` | One-tap paste, real-time validation |
 
 <br/>
 
@@ -216,7 +216,28 @@ graph TB
 
 <br/>
 
-### 🐳 Stack: Run everything locally
+### Connect an AI client
+
+Add this to your MCP client configuration (Node.js ≥20):
+
+```json
+{
+  "mcpServers": {
+    "toolconnector": {
+      "command": "npx",
+      "args": ["-y", "@toolrator/toolconnector@0.4.0"]
+    }
+  }
+}
+```
+
+Restart the client, then ask it to run `manage_auth` with `action: "start_oauth"` and show the verification URL. After approving login, ask it to search the configured catalog. Results depend on the servers listed by that search engine.
+
+Server developers: see the [publication guide](https://toolrator.org/docs/publish) to list an existing reachable MCP endpoint.
+
+### 🐳 Optional: Run the search stack locally
+
+Requires Node.js ≥22.9 for Toolpanel and the Toolhub development scripts. Clone `https://github.com/toolrator/Toolrator.git` first; use separate terminals for the services.
 
 <details open>
 <summary><b>Step 1 — Start the search engine</b></summary>
@@ -236,7 +257,7 @@ SEARCH_BACKEND=memory npm run dev
 <summary><b>Step 2 — Start the control panel</b></summary>
 
 ```bash
-npx -y @toolrator/toolpanel
+npx -y @toolrator/toolpanel@0.3.0
 # → http://127.0.0.1:7800
 ```
 
@@ -254,7 +275,12 @@ Add to your MCP client config:
   "mcpServers": {
     "toolconnector": {
       "command": "npx",
-      "args": ["-y", "@toolrator/toolconnector"]
+      "args": ["-y", "@toolrator/toolconnector@0.4.0"],
+      "env": {
+        "TOOLPANEL_URL": "http://127.0.0.1:7800",
+        "CONNECTOR_SEARCH_CONFIG_MODE": "toolpanel",
+        "CONNECTOR_API_KEY": "toolpanel-local"
+      }
     }
   }
 }
@@ -264,7 +290,7 @@ Add to your MCP client config:
 
 <br/>
 
-> 💡 **Offline mode**: Set `TOOLPANEL_URL=http://127.0.0.1:7800` and `CONNECTOR_SEARCH_CONFIG_MODE=toolpanel` for a fully self-contained setup.
+> 💡 **Local configuration**: In the MCP client's `env` block, set `TOOLPANEL_URL=http://127.0.0.1:7800`, `CONNECTOR_SEARCH_CONFIG_MODE=toolpanel`, and `CONNECTOR_API_KEY=toolpanel-local`. Toolpanel accepts any non-empty credential. An empty local index returns no servers; populate your own index through the panel. Remote MCP endpoints still require network access.
 
 <br/>
 
@@ -329,8 +355,8 @@ Servers running `2025-11-25` are handled automatically. The SDK's `versionNegoti
 
 | Variable | Default | Purpose |
 | :--- | :--- | :--- |
-| `CONNECTOR_API_KEY` | — | Pre-configured API key (skips device flow) |
-| `CONNECTOR_CONFIG_DIR` | OS default | Credentials, favorites, search-engines |
+| `CONNECTOR_API_KEY` | — | Pre-configured machine credential |
+| `CONNECTOR_CONFIG_DIR` | OS default | Credentials, search-engines |
 | `CONNECTOR_UPSTREAM_URL` | `https://toolrator.org` | Auth endpoint base URL |
 | `TOOLPANEL_URL` | `http://127.0.0.1:7800` | Self-hosted control panel URL |
 | `TOOLPANEL_DISCOVERY` | `auto` | Probe toolpanel at boot |
@@ -366,7 +392,7 @@ Servers running `2025-11-25` are handled automatically. The SDK's `versionNegoti
 <details>
 <summary><b>Can I self-host everything without internet?</b></summary>
 <br/>
-Yes. Run Toolpanel + Toolhub locally. Point `TOOLPANEL_URL=http://127.0.0.1:7800` and set `CONNECTOR_SEARCH_CONFIG_MODE=toolpanel` — no cloud dependency.
+You can self-host configuration and search with Toolpanel + Toolhub. Install dependencies and cache any embedding model first. Set `TOOLPANEL_URL=http://127.0.0.1:7800`, `CONNECTOR_SEARCH_CONFIG_MODE=toolpanel`, and a non-empty `CONNECTOR_API_KEY` in your client's environment. Accessing remote MCP servers still requires network access.
 </details>
 
 <br/>

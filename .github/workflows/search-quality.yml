@@ -121,6 +121,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -165,5 +168,6 @@ jobs:
             echo "Baseline unchanged — nothing to commit."
           else
             git commit -m "chore(toolhub): update search eval baseline"
+            git pull --rebase origin main
             git push
           fi

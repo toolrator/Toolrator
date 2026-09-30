@@ -11,17 +11,17 @@ A small npm workspace of **three packages** — no other directories:
 
 | Path | npm name | Published? | What it is |
 |---|---|---|---|
-| `packages/toolconnector` | `@toolrator/toolconnector` | ✅ npm | Local stdio MCP bridge: 4 unified tools (`search_mcp_ecosystem`, `mcp_server`, `manage_auth`, `manage_favorites`) |
-| `packages/toolpanel` | `@toolrator/toolpanel` | ✅ npm | Self-hosted Hono control panel: device-flow auth, search-engine config, admin UI |
+| `packages/toolconnector` | `@toolrator/toolconnector` | ✅ npm | Local stdio MCP bridge: 3 unified tools (`search_mcp_ecosystem`, `mcp_server`, `manage_auth`) |
+| `packages/toolpanel` | `@toolrator/toolpanel` | ✅ npm | Self-hosted Hono control panel: local configuration, search-engine config, admin UI; no authentication |
 | `packages/toolhub` | `@toolrator/toolhub` | ❌ never (`private: true`) | MCP-server search engine: MeiliSearch or in-memory backend, optional embeddings |
 
-Root `package.json` defines `test`/`build`/`typecheck` across workspaces. It exists
-for ergonomics; CI does **not** use it — per-package commands are canonical.
+The public repository root is an npm workspace with a root lockfile. Per-package
+commands are canonical; keep the root lockfile consistent after dependency or
+version changes and verify root `npm ci`.
 
 ## Setup Commands
 
-- Install **per package** (never `npm install` at the repo root — there is no
-  root lockfile):
+- Install **per package** for package development:
   ```bash
   cd packages/toolconnector && npm ci   # or npm install
   cd packages/toolpanel && npm ci
