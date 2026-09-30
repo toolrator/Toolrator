@@ -19,13 +19,13 @@ active_containers=$(docker ps --format "{{.Names}}")
 target_containers=()
 
 for name in $active_containers; do
-    if [[ "$name" == *"meili"* || "$name" == *"search"* ]]; then
+    if [[ "$name" == *"meili"* || "$name" == *"search"* || "$name" == *"toolhub"* ]]; then
         target_containers+=("$name")
     fi
 done
 
 if [ ${#target_containers[@]} -eq 0 ]; then
-    echo -e "${YELLOW}No active Meilisearch or Search Engine containers found matching '*meili*' or '*search*'.${NC}"
+    echo -e "${YELLOW}No active Meilisearch or Toolhub containers found.${NC}"
     echo -e "${YELLOW}Falling back to streaming stats for ALL running containers...${NC}"
     echo -e "${GRAY}Press Ctrl+C to exit.\n${NC}"
     docker stats

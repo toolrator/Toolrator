@@ -6,6 +6,7 @@ import { Indexer } from "../src/indexer.js";
 import { loadConfig } from "../src/config.js";
 import type { EmbeddingProvider } from "../src/embedder.js";
 import { chunkText } from "../src/embedder.js";
+import { encodeServerId, toolDocumentId } from "../src/tool-indexer.js";
 
 /**
  * Fake embedder: deterministic, instant, model-free. Keeps tests fast and
@@ -171,6 +172,54 @@ describe("Toolhub - In-Memory Tests", () => {
     assert.strictEqual(resultPaged.hits[0].mcp_name, "item-3");
   });
 
+  test("Browse pagination reaches beyond the default top-K window", async () => {
+    const { service } = makeService();
+    await service.indexer.indexBatch(Array.from({ length: 25 }, (_, i) => ({
+      mcp_name: `browse-${i}`, display_name: `Browse ${i}`, tags: [],
+    })));
+    const page = await service.search("", { offset: 22, limit: 2 });
+    assert.strictEqual(page.total, 25);
+    assert.strictEqual(page.hits.length, 2);
+    assert.strictEqual(page.hits[0].mcp_name, "browse-22");
+  });
+
+  test("A tool-free update removes previous tool documents", async () => {
+    const { adapter, service } = makeService();
+    await service.indexer.indexBatch([{
+      mcp_name: "changing", display_name: "Changing", tags: [],
+      capabilities: { tools: [{ name: "old_tool" }] },
+    }]);
+    assert.strictEqual(await adapter.getToolDocumentCount(), 1);
+    await service.indexer.indexBatch([{
+      mcp_name: "changing", display_name: "Changing", tags: [],
+      capabilities: { tools: [] },
+    }]);
+    assert.strictEqual(await adapter.getToolDocumentCount(), 0);
+  });
+
+  test("Configured tool limits apply to incremental indexing", async () => {
+    const { adapter, service } = makeService({ TOOLHUB_MAX_TOOLS_EMBEDDED: "1" });
+    await service.indexer.indexBatch([{
+      mcp_name: "limited", display_name: "Limited", tags: [],
+      capabilities: { tools: [{ name: "first" }, { name: "second" }] },
+    }]);
+    assert.strictEqual(await adapter.getToolDocumentCount(), 1);
+  });
+
+  test("Invalid full reindex keeps existing documents", async () => {
+    const { adapter, service } = makeService();
+    await service.indexer.indexBatch([{ mcp_name: "keep", display_name: "Keep", tags: [] }]);
+    await assert.rejects(() => service.indexer.reindex([{ mcp_name: "invalid!!!" }]), /no valid documents/);
+    assert.strictEqual(await adapter.getDocumentCount(), 1);
+    assert.ok(await adapter.getByName("keep"));
+  });
+
+  test("Document IDs remain distinct after former lossy encodings", () => {
+    assert.notStrictEqual(encodeServerId("foo.bar"), encodeServerId("foo_bar"));
+    assert.notStrictEqual(encodeServerId("foo/bar"), encodeServerId("foo__bar"));
+    assert.notStrictEqual(toolDocumentId("foo", "read.file"), toolDocumentId("foo", "read_file"));
+  });
+
   test("Tool hits via the D7 tool index", async () => {
     const { service } = makeService();
 
@@ -291,7 +340,7 @@ describe("Toolhub - In-Memory Tests", () => {
     assert.strictEqual(list.servers[0].id, "filesystem");
     assert.ok(list.servers[0].content_hash);
     assert.strictEqual(list.tools.length, 1);
-    assert.strictEqual(list.tools[0].id, "filesystem__read_file");
+    assert.strictEqual(list.tools[0].id, toolDocumentId("filesystem", "read_file"));
   });
 });
 
@@ -321,6 +370,10 @@ describe("Toolhub - Embedding Chunking", () => {
     for (const chunk of emojiChunks) {
       assert.ok([...chunk].every((cp) => cp === "🎉"), "surrogate pair split detected");
     }
+
+    const punctuation = "!Important" + "x".repeat(100);
+    assert.strictEqual(chunkText(punctuation, 16).join(""), punctuation);
+    assert.deepStrictEqual(chunkText("🎉🎉", 1), ["🎉", "🎉"]);
   });
 
   test("embedMany chunks long documents into multiple bounded requests", async () => {

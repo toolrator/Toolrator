@@ -16,9 +16,10 @@
 // ---------------------------------------------------------------------------
 
 import { createHash } from "node:crypto";
+import { LRUCache } from "lru-cache";
 import type { SearchAdapter, SearchDocument } from "./adapters/types.js";
 import type { EmbeddingProvider } from "./embedder.js";
-import { buildToolDocuments, buildToolDocumentsForServer } from "./tool-indexer.js";
+import { buildToolDocuments, buildToolDocumentsForServer, type ToolBuildOptions } from "./tool-indexer.js";
 
 /** Allowed characters in mcp_name: lowercase alphanumeric, hyphens, underscores, dots, and slashes. */
 const MCP_NAME_REGEXP = /^[a-z0-9][a-z0-9._\/-]{0,127}$/;
@@ -45,6 +46,7 @@ export interface IndexerOptions {
   maxDescriptionChars?: number;
   /** Cap for the semantic text used for embedding (cost/latency bound). */
   maxSemanticChars?: number;
+  toolBuildOptions?: ToolBuildOptions;
 }
 
 function envPositiveInt(name: string, fallback: number): number {
@@ -54,6 +56,11 @@ function envPositiveInt(name: string, fallback: number): number {
 
 export class Indexer {
   readonly adapter: SearchAdapter;
+  private readonly vectorCache = new LRUCache<string, number[]>({
+    max: 2000,
+    maxSize: 32 * 1024 * 1024,
+    sizeCalculation: (vector) => vector.length * 8,
+  });
 
   constructor(
     adapter: SearchAdapter,
@@ -86,7 +93,7 @@ export class Indexer {
     }
 
     // Embed everything in one batched call
-    const vectors = await this.embedder.embedMany(
+    const vectors = await this.embedTexts(
       valid.map((doc) => doc.semantic_text ?? ""),
       "document",
     );
@@ -131,7 +138,7 @@ export class Indexer {
     }
 
     doc.semantic_text = this.buildSemanticText(doc);
-    const vector = await this.embedder.embedDocument(doc.semantic_text);
+    const vector = (await this.embedTexts([doc.semantic_text], "document"))[0];
     if (vector) {
       doc._vectors = { default: vector };
       doc.has_vector = true;
@@ -161,31 +168,25 @@ export class Indexer {
   }
 
   /**
-   * Full reindex: clear both indexes and re-import all provided documents.
+   * Full reindex: prepare every document, then replace both indexes.
    *
    * Unlike the incremental path (indexBatch → rebuildToolsForServers, which
    * must remove+rebuild per server because the tool index is shared), a full
-   * reindex has already cleared the tool index, so all tool documents are
+   * reindex builds a fresh tool index, so all tool documents are
    * built from the fresh batch in ONE batched embed + ONE bulk add. This is
    * what makes reindexing a real catalog (hundreds of servers, thousands of
    * tools) feasible — the per-server loop would otherwise serialize hundreds
    * of MeiliSearch task round-trips and embed calls.
    */
   async reindex(rawDocuments: unknown[]): Promise<IndexBatchResult> {
-    await this.adapter.clear();
-    if (this.adapter.toolIndexEnabled) {
-      await this.adapter.clearTools();
-    }
-
     const { valid, skipped } = this.validateAll(rawDocuments);
     if (valid.length === 0) {
-      this.logger.warn("[indexer] No valid documents in batch, skipping");
-      return { indexed: 0, indexedWithoutVector: 0, skipped, toolsIndexed: 0 };
+      throw new Error("Reindex contains no valid documents; existing indexes were kept");
     }
 
     // Embed + index server documents (one batched call).
     let indexedWithoutVector = 0;
-    const vectors = await this.embedder.embedMany(
+    const vectors = await this.embedTexts(
       valid.map((doc) => doc.semantic_text ?? ""),
       "document",
     );
@@ -203,19 +204,13 @@ export class Indexer {
         }
       }
     }
-    await this.adapter.index(valid);
-
-    // Build + embed + bulk-add ALL tool documents in one go.
+    // Prepare the complete replacement before touching either live index.
     let toolsIndexed = 0;
+    let docs: ReturnType<typeof buildToolDocuments> = [];
     if (this.adapter.toolIndexEnabled) {
-      const docs = buildToolDocuments(valid, {
-        maxToolsEmbedded: envPositiveInt("TOOLHUB_MAX_TOOLS_EMBEDDED", 64),
-        maxToolDescChars: envPositiveInt("TOOLHUB_MAX_TOOL_DESC_CHARS", 1200),
-        maxToolSchemaChars: envPositiveInt("TOOLHUB_MAX_TOOL_SCHEMA_CHARS", 1200),
-        maxToolSemanticChars: envPositiveInt("TOOLHUB_MAX_TOOL_SEMANTIC_CHARS", 8000),
-      });
+      docs = buildToolDocuments(valid, this.toolBuildOptions);
       if (docs.length > 0) {
-        const toolVectors = await this.embedder.embedMany(
+        const toolVectors = await this.embedTexts(
           docs.map((doc) => doc.semantic_text ?? ""),
           "document",
         );
@@ -228,10 +223,11 @@ export class Indexer {
             this.logger.warn(`[indexer] No vector for tool "${docs[i].tool_name}" of "${docs[i].server_mcp_name}"`);
           }
         }
-        await this.adapter.indexTools(docs);
         toolsIndexed = docs.length;
       }
     }
+
+    await this.adapter.replaceAll(valid, docs);
 
     this.logger.info(
       `[indexer] Indexed ${valid.length} documents (${skipped} skipped, ${indexedWithoutVector} without vector, ${toolsIndexed} tools)`
@@ -262,30 +258,67 @@ export class Indexer {
    * embedding all tool texts in one batched call.
    */
   private async rebuildToolsForServers(servers: SearchDocument[]): Promise<number> {
-    let total = 0;
-    for (const server of servers) {
-      const docs = buildToolDocumentsForServer(server);
-      if (docs.length === 0) continue;
-
-      await this.adapter.removeToolsByServer(server.mcp_name);
-
-      const vectors = await this.embedder.embedMany(
-        docs.map((doc) => doc.semantic_text ?? ""),
-        "document",
-      );
-      for (let i = 0; i < docs.length; i++) {
-        const vector = vectors[i];
-        if (vector) {
-          docs[i]._vectors = { default: vector };
-          docs[i].has_vector = true;
-        } else if (this.embedder.provider !== "null" && this.embedder.dimensions > 0) {
-          this.logger.warn(`[indexer] No vector for tool "${docs[i].tool_name}" of "${server.mcp_name}"`);
-        }
+    const perServer = servers.map((server) => ({
+      server,
+      docs: buildToolDocumentsForServer(server, this.toolBuildOptions),
+    }));
+    const allDocs = perServer.flatMap((entry) => entry.docs);
+    const vectors = allDocs.length > 0
+      ? await this.embedTexts(allDocs.map((doc) => doc.semantic_text ?? ""), "document")
+      : [];
+    for (let i = 0; i < allDocs.length; i++) {
+      if (vectors[i]) {
+        allDocs[i]._vectors = { default: vectors[i] as number[] };
+        allDocs[i].has_vector = true;
+      } else if (this.embedder.provider !== "null" && this.embedder.dimensions > 0) {
+        this.logger.warn(`[indexer] No vector for tool "${allDocs[i].tool_name}" of "${allDocs[i].server_mcp_name}"`);
       }
-      await this.adapter.indexTools(docs);
-      total += docs.length;
     }
-    return total;
+
+    await mapWithConcurrency(perServer, async ({ server, docs }) => {
+      await this.adapter.removeToolsByServer(server.mcp_name);
+      await this.adapter.indexTools(docs);
+    }, 4);
+    return allDocs.length;
+  }
+
+  private async embedTexts(texts: string[], kind: "document" | "query"): Promise<Array<number[] | null>> {
+    const results: Array<number[] | null> = new Array(texts.length).fill(null);
+    const missing = new Map<string, number[]>();
+    for (let i = 0; i < texts.length; i++) {
+      if (!texts[i]) continue;
+      const cached = this.vectorCache.get(this.vectorCacheKey(texts[i], kind));
+      if (cached) results[i] = cached;
+      else {
+        const indexes = missing.get(texts[i]) ?? [];
+        indexes.push(i);
+        missing.set(texts[i], indexes);
+      }
+    }
+    if (missing.size > 0) {
+      const unique = [...missing.keys()];
+      const vectors = await this.embedder.embedMany(unique, kind);
+      for (let i = 0; i < unique.length; i++) {
+        const vector = vectors[i];
+        if (!vector) continue;
+        this.vectorCache.set(this.vectorCacheKey(unique[i], kind), vector);
+        for (const index of missing.get(unique[i]) ?? []) results[index] = vector;
+      }
+    }
+    return results;
+  }
+
+  private vectorCacheKey(text: string, kind: string): string {
+    return `${this.embedder.provider}|${this.embedder.model}|${this.embedder.dimensions}|${kind}|${text}`;
+  }
+
+  private get toolBuildOptions(): ToolBuildOptions {
+    return this.options.toolBuildOptions ?? {
+      maxToolsEmbedded: envPositiveInt("TOOLHUB_MAX_TOOLS_EMBEDDED", 64),
+      maxToolDescChars: envPositiveInt("TOOLHUB_MAX_TOOL_DESC_CHARS", 1200),
+      maxToolSchemaChars: envPositiveInt("TOOLHUB_MAX_TOOL_SCHEMA_CHARS", 1200),
+      maxToolSemanticChars: envPositiveInt("TOOLHUB_MAX_TOOL_SEMANTIC_CHARS", 8000),
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -446,4 +479,12 @@ function canonicalize(value: unknown): unknown {
     return sorted;
   }
   return value;
+}
+
+async function mapWithConcurrency<T>(items: T[], action: (item: T) => Promise<void>, maximum: number): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) await action(items[next++]);
+  };
+  await Promise.all(Array.from({ length: Math.min(maximum, items.length) }, worker));
 }

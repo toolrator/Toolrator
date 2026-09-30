@@ -13,7 +13,7 @@
 import type { SearchEngineConfig } from "./config.js";
 import { embeddingProfile } from "./embedder.js";
 
-export const FINGERPRINT_VERSION = 2;
+export const FINGERPRINT_VERSION = 3;
 
 /** Compact schema renderer version (changes invalidate tool vectors). */
 const COMPACT_SCHEMA_VERSION = 1;
@@ -37,6 +37,14 @@ export function computeEmbeddingFingerprint(config: SearchEngineConfig): string 
     String(p.charsPerToken),
     String(p.minChunkChars),
     p.poolingMode,
+    p.inputTypeDoc ?? "none",
+    p.inputTypeQuery ?? "none",
+    String(config.maxToolsEmbedded),
+    String(config.maxToolDescChars),
+    String(config.maxToolSchemaChars),
+    String(config.maxToolSemanticChars),
+    String(config.maxDescriptionChars),
+    String(config.maxSemanticChars),
     `indexer-${INDEXER_BUILDER_VERSION}`,
     `compact-schema-${COMPACT_SCHEMA_VERSION}`,
     config.toolIndexEnabled ? config.toolIndexName : "none",

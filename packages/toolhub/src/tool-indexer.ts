@@ -4,12 +4,13 @@
 // Derives one ToolDocument per tool of a server's capabilities.tools. Tool
 // docs live in a dedicated `mcp_tools` index; each carries a semantic vector
 // over `tool name + description + compact schema + parent server context`.
-// IDs are stable and URL-safe ("{encoded_server}__{encoded_tool}") so tools
-// can be upserted/deleted independently of their parent server.
+// IDs are stable SHA-256 digests of the unsanitized identifiers so distinct
+// names cannot overwrite one another after lossy character replacement.
 // ---------------------------------------------------------------------------
 
 import type { RawTool, SearchDocument, ToolDocument } from "./adapters/types.js";
 import { generateCompactSchema } from "./compact-schema.js";
+import { createHash } from "node:crypto";
 
 /** Tool index builder limits (defaults; overridable per server). */
 export interface ToolBuildOptions {
@@ -141,34 +142,16 @@ function hashString(value: string): string {
 }
 
 /**
- * Stable, URL-safe tool document id: "{encoded_server}__{encoded_tool}".
- * Server ids reuse the server-doc encoding (slashes -> "__", dots -> "_").
- * Tool names are sanitized to [a-z0-9_-]; collisions are avoided by a short
- * stable hash suffix when sanitization would merge two distinct names.
+ * Stable tool document id over the exact server and tool identifiers.
  */
 export function toolDocumentId(serverMcpName: string, toolName: string): string {
-  const serverId = encodeServerId(serverMcpName);
-  const sanitized = sanitizeToolName(toolName);
-  const toolId =
-    sanitized.length > 160
-      ? `${sanitized.slice(0, 160)}_${hashString(sanitized).slice(0, 6)}`
-      : sanitized;
-  return `${serverId}__${toolId}`;
+  return `t_${createHash("sha256")
+    .update(serverMcpName.toLowerCase())
+    .update("\0")
+    .update(toolName)
+    .digest("hex")}`;
 }
 
 export function encodeServerId(mcpName: string): string {
-  return mcpName
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._/-]/g, "_")
-    .replace(/\//g, "__")
-    .replace(/\./g, "_");
-}
-
-export function sanitizeToolName(toolName: string): string {
-  return toolName
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]/g, "_")
-    .replace(/_+/g, "_");
+  return `s_${createHash("sha256").update(mcpName.trim().toLowerCase()).digest("hex")}`;
 }

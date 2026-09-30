@@ -293,14 +293,6 @@ export interface IndexListEntry {
 }
 
 /**
- * A normalized, embeddable document produced by the indexer.
- */
-export interface IndexedDocument {
-  doc: SearchDocument;
-  vector: number[] | null;
-}
-
-/**
  * The pluggable search adapter interface.
  *
  * Implementations must be stateless with respect to query handling — all
@@ -308,6 +300,8 @@ export interface IndexedDocument {
  * translation layer between the search service and the backend's native API.
  */
 export interface SearchAdapter {
+  /** Whether query vectors affect this adapter's search results. */
+  readonly vectorSearchEnabled: boolean;
   /**
    * Check backend connectivity. Throws or returns false on failure.
    */
@@ -363,6 +357,9 @@ export interface SearchAdapter {
    * Clear all documents from the index.
    */
   clear(): Promise<void>;
+
+  /** Replace both document indexes after their complete contents are ready. */
+  replaceAll(servers: SearchDocument[], tools: ToolDocument[]): Promise<void>;
 
   /**
    * Retrieve all indexed documents. Used for full data export (search dump).

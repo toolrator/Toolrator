@@ -1,11 +1,8 @@
 # docker-stats.ps1
 # Monitor Docker CPU/RAM/Network/Block IO usage for Search Engine and Meilisearch
 
-$MeiliContainer = "mcp-se-meilisearch"
-$SearchContainer = "toolhub"
-
 Write-Host "=============================================" -ForegroundColor Cyan
-Write-Host " Docker Container Performance Monitor        " -ForegroundColor Cyan -Bold
+Write-Host " Docker Container Performance Monitor        " -ForegroundColor Cyan
 Write-Host "=============================================" -ForegroundColor Cyan
 
 # Find running container names that might match search or meili
@@ -15,13 +12,13 @@ $ActiveContainers = docker ps --format "{{.Names}}"
 $TargetContainers = @()
 
 foreach ($Name in $ActiveContainers) {
-    if ($Name -like "*meili*" -or $Name -like "*search*") {
+    if ($Name -like "*meili*" -or $Name -like "*search*" -or $Name -like "*toolhub*") {
         $TargetContainers += $Name
     }
 }
 
 if ($TargetContainers.Count -eq 0) {
-    Write-Host "No active Meilisearch or Search Engine containers found matching '*meili*' or '*search*'." -ForegroundColor Yellow
+    Write-Host "No active Meilisearch or Toolhub containers found." -ForegroundColor Yellow
     Write-Host "Falling back to streaming stats for ALL running containers..." -ForegroundColor Yellow
     Write-Host "Press Ctrl+C to exit.`n" -ForegroundColor Gray
     docker stats

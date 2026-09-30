@@ -85,11 +85,10 @@ async function main() {
   
   const startTime = performance.now();
   const endTime = startTime + (durationSec * 1000);
-  let stopBenchmark = false;
 
   // Worker loop
   const runWorker = async () => {
-    while (performance.now() < endTime && !stopBenchmark) {
+    while (performance.now() < endTime) {
       // Pick a random query
       const query = DICTIONARY[Math.floor(Math.random() * DICTIONARY.length)];
       const url = `${targetUrl}?q=${encodeURIComponent(query)}`;
@@ -97,11 +96,12 @@ async function main() {
       const t0 = performance.now();
       try {
         totalRequests++;
-        const res = await fetch(url);
+        const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+        await res.arrayBuffer();
         const t1 = performance.now();
         
-        latencies.push(t1 - t0);
         if (res.status === 200) {
+          latencies.push(t1 - t0);
           successRequests++;
         } else {
           errorRequests++;
@@ -118,7 +118,7 @@ async function main() {
   // Progress tracker
   const progressTimer = setInterval(() => {
     const elapsed = (performance.now() - startTime) / 1000;
-    const progress = Math.min(100, (elapsed / durationSec) * 1000 * 100);
+    const progress = Math.min(100, (elapsed / durationSec) * 100);
     const rps = (totalRequests / elapsed).toFixed(1);
     process.stdout.write(`\r${colors.cyan}Progress: ${progress.toFixed(0)}% | Requests: ${totalRequests} | Current RPS: ${rps}${colors.reset}`);
   }, 200);
@@ -128,7 +128,6 @@ async function main() {
   clearInterval(progressTimer);
   
   const totalDuration = (performance.now() - startTime) / 1000;
-  stopBenchmark = true;
 
   console.log("\n\n" + colors.green + colors.bold + "=============================================");
   console.log(" Benchmark Results ");

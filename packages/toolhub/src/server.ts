@@ -32,6 +32,8 @@ async function createAdapter(config: SearchEngineConfig): Promise<SearchAdapter>
       // Keep MeiliSearch vector settings in sync with the selected
       // embedding provider (e.g. 1024 dims for bge-m3 / qwen3).
       dimensions: embeddingDimensions(),
+      toolIndexEnabled: config.toolIndexEnabled,
+      toolIndexName: config.toolIndexName,
     });
     await adapter.initialize();
     return adapter;
@@ -39,7 +41,7 @@ async function createAdapter(config: SearchEngineConfig): Promise<SearchAdapter>
 
   // Default: in-memory adapter for development
   console.log("[search] Using in-memory search adapter (dev mode)");
-  return new MemorySearchAdapter();
+  return new MemorySearchAdapter({ toolIndexEnabled: config.toolIndexEnabled });
 }
 
 // ---------------------------------------------------------------------------
@@ -86,7 +88,9 @@ export function createApp(
     if (c.req.path.startsWith("/admin")) return next();
     return publicCors(c, next);
   });
-  app.use("*", logger());
+  if (config.logLevel === "debug" || config.logLevel === "info") {
+    app.use("*", logger());
+  }
 
   // Request timing header
   app.use("*", async (c, next) => {
@@ -147,20 +151,24 @@ export function createApp(
    * Same as GET /search but accepts a JSON body for complex queries.
    */
   app.post("/search", async (c) => {
-    let body: Record<string, unknown>;
+    let body: unknown;
     try {
       body = await c.req.json();
     } catch {
       return c.json({ error: "invalid JSON body" }, 400);
     }
 
-    const query = typeof body.query === "string" ? body.query : (typeof body.q === "string" ? body.q : "");
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return c.json({ error: "search body must be an object" }, 400);
+    }
+    const record = body as Record<string, unknown>;
+    const query = typeof record.query === "string" ? record.query : (typeof record.q === "string" ? record.q : "");
     const options: SearchOptions = {
-      limit: typeof body.limit === "number" ? body.limit : undefined,
-      offset: typeof body.offset === "number" ? body.offset : undefined,
-      tags: Array.isArray(body.tags) ? body.tags.filter((t: unknown) => typeof t === "string") : undefined,
-      provider: typeof body.provider === "string" ? body.provider : undefined,
-      maxTools: typeof body.maxTools === "number" ? body.maxTools : undefined,
+      limit: typeof record.limit === "number" ? record.limit : undefined,
+      offset: typeof record.offset === "number" ? record.offset : undefined,
+      tags: Array.isArray(record.tags) ? record.tags.filter((t: unknown) => typeof t === "string") : undefined,
+      provider: typeof record.provider === "string" ? record.provider : undefined,
+      maxTools: typeof record.maxTools === "number" ? record.maxTools : undefined,
     };
 
     const result = await service.search(query, options);
@@ -298,8 +306,8 @@ export function createApp(
 
   /**
    * POST /admin/reindex
-   * Full reindex from a provided payload (clears both indexes first, rebuilds
-   * tool documents, and records the embedding fingerprint as active).
+   * Full reindex from a provided payload (builds replacement indexes, swaps
+   * them into place, and records the embedding fingerprint as active).
    * Body: { documents: [...] }
    */
   admin.post("/reindex", async (c) => {
@@ -316,8 +324,8 @@ export function createApp(
     }
 
     const result = await service.indexer.reindex(docs);
-    await service.recordEmbeddingFingerprint();
     service.clearCache();
+    await service.recordEmbeddingFingerprint();
     return c.json({
       success: true,
       ...result,
@@ -409,7 +417,7 @@ async function main(): Promise<void> {
   }
 
   const adapter = await createAdapter(config);
-  const service = new SearchService(adapter, config);
+  const service = new SearchService(adapter, config, createServiceLogger(config.logLevel));
   const app = createApp(service, config);
 
   serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {
@@ -419,6 +427,15 @@ async function main(): Promise<void> {
     console.log(`   Admin:   POST http://localhost:${info.port}/admin/index`);
     console.log();
   });
+}
+
+function createServiceLogger(level: SearchEngineConfig["logLevel"]): Pick<Console, "info" | "warn" | "error"> {
+  const rank = { debug: 0, info: 1, warn: 2, error: 3 }[level];
+  return {
+    info: (...args: unknown[]) => { if (rank <= 1) console.info(...args); },
+    warn: (...args: unknown[]) => { if (rank <= 2) console.warn(...args); },
+    error: (...args: unknown[]) => { if (rank <= 3) console.error(...args); },
+  };
 }
 
 // Start only when this module is the entry point (dev/start scripts).

@@ -27,6 +27,7 @@ import type {
   ToolSearchResult,
 } from "./adapters/types.js";
 import { Indexer } from "./indexer.js";
+import { generateCompactSchema } from "./compact-schema.js";
 import { LRUCache } from "lru-cache";
 import { createEmbedder, type EmbeddingProvider } from "./embedder.js";
 
@@ -35,6 +36,11 @@ export class SearchService {
   private readonly embedder: EmbeddingProvider;
   private activeEmbeddingJobs = 0;
   private readonly maxEmbeddingJobs = 5;
+  private readonly pendingResults = new Map<string, Promise<SearchResult>>();
+  private readonly pendingEmbeddings = new Map<string, Promise<number[] | undefined>>();
+  private cacheGeneration = 0;
+  private activeFingerprint: string | null = null;
+  private fingerprintCheckedAt = 0;
 
   private readonly resultCache = new LRUCache<string, SearchResult>({
     max: 1000,
@@ -53,7 +59,16 @@ export class SearchService {
     embedder?: EmbeddingProvider,
   ) {
     this.embedder = embedder ?? createEmbedder(logger);
-    this.indexer = new Indexer(adapter, this.embedder, logger);
+    this.indexer = new Indexer(adapter, this.embedder, logger, {
+      maxDescriptionChars: config.maxDescriptionChars,
+      maxSemanticChars: config.maxSemanticChars,
+      toolBuildOptions: {
+        maxToolsEmbedded: config.maxToolsEmbedded,
+        maxToolDescChars: config.maxToolDescChars,
+        maxToolSchemaChars: config.maxToolSchemaChars,
+        maxToolSemanticChars: config.maxToolSemanticChars,
+      },
+    });
   }
 
   /**
@@ -137,13 +152,29 @@ export class SearchService {
       updated_at: new Date().toISOString(),
     };
     await this.adapter.writeEmbeddingMeta(meta);
+    this.activeFingerprint = currentFingerprint;
+    this.fingerprintCheckedAt = Date.now();
+  }
+
+  private async canUseCurrentVectors(): Promise<boolean> {
+    if (Date.now() - this.fingerprintCheckedAt > 30_000) {
+      try {
+        const meta = await this.adapter.readEmbeddingMeta();
+        this.activeFingerprint = meta?.active_fingerprint ?? null;
+        this.fingerprintCheckedAt = Date.now();
+      } catch (err) {
+        this.logger.warn("[search] Could not read embedding fingerprint:", err);
+        return false;
+      }
+    }
+    return this.activeFingerprint === null || this.activeFingerprint === computeEmbeddingFingerprint(this.config);
   }
 
   /**
    * Determine if the query warrants semantic vector search.
    */
   private shouldRunSemanticSearch(query: string): boolean {
-    if (this.embedder.provider === "null" || this.embedder.dimensions <= 0) return false;
+    if (!this.adapter.vectorSearchEnabled || this.embedder.provider === "null" || this.embedder.dimensions <= 0) return false;
     if (!query) return false;
     const trimmed = query.trim();
     if (trimmed.length < 3) return false;
@@ -171,7 +202,7 @@ export class SearchService {
       tags: options?.tags?.map((t) => t.trim().toLowerCase()).filter(Boolean),
       provider: options?.provider?.trim() || undefined,
       lexicalOnly: options?.lexicalOnly,
-      maxTools: options?.maxTools !== undefined ? Number(options.maxTools) : this.config.maxToolHitsReturned,
+      maxTools: normalizeToolLimit(options?.maxTools, this.config.maxToolHitsReturned),
     };
 
     // Construct cache key based on query and filters
@@ -184,56 +215,88 @@ export class SearchService {
       };
     }
 
+    const inFlight = this.pendingResults.get(cacheKey);
+    if (inFlight) return inFlight;
+    const pending = this.searchUncached(query, sanitizedOptions, limit, offset, cacheKey, this.cacheGeneration);
+    this.pendingResults.set(cacheKey, pending);
+    try {
+      return await pending;
+    } finally {
+      if (this.pendingResults.get(cacheKey) === pending) this.pendingResults.delete(cacheKey);
+    }
+  }
+
+  private async searchUncached(
+    query: string,
+    sanitizedOptions: SearchOptions,
+    limit: number,
+    offset: number,
+    cacheKey: string,
+    cacheGeneration: number,
+  ): Promise<SearchResult> {
+
     // Calculate query vector if query warrants it (embedded ONCE for both indexes)
     let vector: number[] | undefined = undefined;
-    if (!sanitizedOptions.lexicalOnly && this.shouldRunSemanticSearch(query)) {
+    let capacityFallback = false;
+    if (!sanitizedOptions.lexicalOnly && this.shouldRunSemanticSearch(query) && await this.canUseCurrentVectors()) {
       const cachedVector = this.embeddingCache.get(query);
       if (cachedVector) {
         vector = cachedVector;
+      } else if (this.pendingEmbeddings.has(query)) {
+        try {
+          vector = await this.pendingEmbeddings.get(query);
+        } catch (err) {
+          this.logger.error("[search] Failed to generate shared query embedding:", err);
+        }
       } else if (this.activeEmbeddingJobs >= this.maxEmbeddingJobs) {
         this.logger.warn(`[search] Embedding capacity busy (${this.activeEmbeddingJobs} jobs). Falling back to lexical search for: "${query}"`);
+        capacityFallback = true;
       } else {
         this.activeEmbeddingJobs++;
+        const pendingEmbedding = this.embedder.embedQuery(query);
+        this.pendingEmbeddings.set(query, pendingEmbedding);
         try {
-          vector = await this.embedder.embedQuery(query);
+          vector = await pendingEmbedding;
           this.embeddingCache.set(query, vector);
         } catch (err) {
           this.logger.error(`[search] Failed to generate query embedding:`, err);
         } finally {
           this.activeEmbeddingJobs--;
+          this.pendingEmbeddings.delete(query);
         }
       }
     }
 
+    // Without the tool index there is no merge to paginate after the backend.
+    const useToolIndex = !!query && this.adapter.toolIndexEnabled && !sanitizedOptions.lexicalOnly;
+    const candidateCount = Math.max(this.config.searchServerTopK, offset + limit);
+
     // 1. Server index search (top-K for RRF; offset applied after the merge)
-    const serverResult = await this.adapter.search(query, {
+    const serverPromise = this.adapter.search(query, {
       ...sanitizedOptions,
       vector,
-      offset: 0,
-      limit: this.config.searchServerTopK,
+      offset: useToolIndex ? 0 : offset,
+      limit: useToolIndex ? candidateCount : limit,
     });
 
     // 2. Tool index search — skipped for /suggest (lexicalOnly) and browse-all
-    const useToolIndex =
-      !!query &&
-      this.adapter.toolIndexEnabled &&
-      !sanitizedOptions.lexicalOnly;
     let toolResult: ToolSearchResult | null = null;
     let toolSearchError: string | undefined;
-    if (useToolIndex) {
-      try {
-        toolResult = await this.adapter.searchTools(query, {
+    const toolPromise = useToolIndex
+      ? this.adapter.searchTools(query, {
           vector,
-          limit: this.config.searchToolTopK,
+          limit: Math.max(this.config.searchToolTopK, (offset + limit) * 5),
           tags: sanitizedOptions.tags,
           provider: sanitizedOptions.provider,
           withScores: true,
-        });
-      } catch (err) {
+        }).catch((err: unknown) => {
         toolSearchError = err instanceof Error ? err.message : String(err);
         this.logger.error(`[search] Tool index search failed (${toolSearchError}) — using legacy extraction`);
-      }
-    }
+        return null;
+      })
+      : Promise.resolve(null);
+    const [serverResult, searchedTools] = await Promise.all([serverPromise, toolPromise]);
+    toolResult = searchedTools;
 
     // 3. Intent classification (server-first heuristic, D7)
     const intent = this.classifyIntent({
@@ -244,24 +307,24 @@ export class SearchService {
     });
 
     // 4. RRF merge of server hits with per-server tool rollup
-    const merged = rrfMerge(serverResult.hits, toolResult?.hits ?? [], this.config);
-    const page = merged.slice(offset, offset + limit);
+    const merged = useToolIndex ? rrfMerge(serverResult.hits, toolResult?.hits ?? [], this.config) : serverResult.hits;
+    const page = useToolIndex ? merged.slice(offset, offset + limit) : merged;
 
     // 5. Tool hit rollup (capped per server; more when intent is tool-first)
     const maxPerServer = intent.intent === "tool" ? 5 : 3;
     const toolHits = toolResult
       ? buildToolHits(toolResult.hits, maxPerServer, sanitizedOptions.maxTools, this.config.maxToolHitsReturned)
       : query
-        ? this.extractToolHits(query, serverResult.hits, this.config.maxToolHitsReturned)
-        : [];
+      ? this.extractToolHits(query, serverResult.hits, sanitizedOptions.maxTools)
+      : [];
 
     const result: SearchResult = {
       hits: page,
       toolHits,
-      total: serverResult.total,
+      total: Math.max(serverResult.total, useToolIndex ? merged.length : 0),
       offset,
       limit,
-      processingTimeMs: serverResult.processingTimeMs + (toolResult?.processingTimeMs ?? 0),
+      processingTimeMs: Math.max(serverResult.processingTimeMs, toolResult?.processingTimeMs ?? 0),
       facets: serverResult.facets,
       intent: intent.intent,
       intentConfidence: intent.confidence,
@@ -273,7 +336,7 @@ export class SearchService {
       },
     };
 
-    this.resultCache.set(cacheKey, result);
+    if (!capacityFallback && cacheGeneration === this.cacheGeneration) this.resultCache.set(cacheKey, result);
     return result;
   }
 
@@ -379,7 +442,7 @@ export class SearchService {
    * is unavailable — deprecated in favor of the D7 tool index).
    */
   private extractToolHits(query: string, hits: SearchHit[], maxTools: number = 10): ToolHit[] {
-    if (!query) return [];
+    if (!query || maxTools <= 0) return [];
     const normalizedQuery = query.toLowerCase().trim();
     const toolHits: ToolHit[] = [];
 
@@ -461,7 +524,9 @@ export class SearchService {
    * Evict entries from the result cache (e.g. after database changes).
    */
   clearCache(): void {
+    this.cacheGeneration++;
     this.resultCache.clear();
+    this.pendingResults.clear();
   }
 }
 
@@ -556,6 +621,7 @@ function buildToolHits(
   const perServer = new Map<string, number>();
   const out: ToolHit[] = [];
   const cap = Math.min(maxTools ?? globalMax, globalMax);
+  if (cap <= 0) return out;
 
   for (const doc of docs) {
     const count = perServer.get(doc.server_mcp_name) ?? 0;
@@ -624,72 +690,8 @@ function normalizeOffset(raw: number | undefined): number {
   return parsed >= 0 ? parsed : 0;
 }
 
-function generateCompactSchema(inputSchema: any): string {
-  if (!inputSchema || typeof inputSchema !== "object") {
-    return "—";
-  }
-  if (inputSchema.oneOf || inputSchema.anyOf || inputSchema.allOf) {
-    return "(complex schema — see the server's full input schema)";
-  }
-  if (inputSchema.$ref) {
-    return "(referenced schema — see the server's full input schema)";
-  }
 
-  const properties = inputSchema.properties;
-  if (!properties || typeof properties !== "object") {
-    if (inputSchema.type === "object" || inputSchema.additionalProperties) {
-      return "— (freeform object)";
-    }
-    return "—";
-  }
-
-  const required = Array.isArray(inputSchema.required) ? inputSchema.required : [];
-  const parts: string[] = [];
-
-  for (const [key, prop] of Object.entries(properties)) {
-    if (!prop || typeof prop !== "object") continue;
-    const isReq = required.includes(key);
-    let typeStr = (prop as any).type || "any";
-
-    if (typeof (prop as any).format === "string") {
-      typeStr += `:${(prop as any).format}`;
-    }
-
-    if (Array.isArray((prop as any).enum)) {
-      const enumValues = (prop as any).enum;
-      const enumStr = enumValues.slice(0, 5).join("|");
-      const hasMore = enumValues.length > 5 ? "..." : "";
-      typeStr = `${typeStr}: ${enumStr}${hasMore}`;
-    }
-
-    if (typeStr === "array" && (prop as any).items && typeof (prop as any).items === "object") {
-      const itemType = (prop as any).items.type || "any";
-      typeStr = `array<${itemType}>`;
-    }
-
-    let defaultStr = "";
-    if ((prop as any).default !== undefined) {
-      defaultStr = `=${(prop as any).default}`;
-    }
-
-    parts.push(`${key}${isReq ? "*" : ""} (${typeStr}${defaultStr})`);
-  }
-
-  if (parts.length === 0) {
-    return "—";
-  }
-
-  parts.sort((a, b) => {
-    const aReq = a.includes("*");
-    const bReq = b.includes("*");
-    if (aReq && !bReq) return -1;
-    if (!aReq && bReq) return 1;
-    return a.localeCompare(b);
-  });
-
-  const joined = parts.join(", ");
-  if (joined.length > 200) {
-    return joined.slice(0, 200) + "…";
-  }
-  return joined;
+function normalizeToolLimit(raw: number | undefined, maximum: number): number {
+  if (raw === undefined || !Number.isFinite(raw)) return maximum;
+  return Math.min(maximum, Math.max(0, Math.trunc(raw)));
 }

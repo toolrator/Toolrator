@@ -7,8 +7,8 @@ A fast, typo-tolerant search engine for discovering MCP servers. Part of the too
 - **Full-text search** with typo tolerance (MeiliSearch) and prefix matching
 - **Semantic / hybrid search** — queries are vectorized by a pluggable embedding provider (opt-in: local ONNX `Xenova/multilingual-e5-small`, or any OpenAI-compatible API — Cloudflare Workers AI, OpenRouter, ... see the embedding models guide below) and fused with lexical results via MeiliSearch's hybrid search. Embeddings are **off by default** (`TOOLHUB_EMBEDDING_PROVIDER` unset → pure lexical search); semantic search activates only when a provider is configured. Lexical-only fallback when no vector is available (e.g. single short keywords, the in-memory backend, or an embedding failure).
 - **Tool-level ranking (D7 tool index)** — every tool from `capabilities.tools` is indexed as its own document (`mcp_tools`) and ranked by RRF against the server surface. Tool evidence rolls up into server cards (bounded: a tool cluster can never outrank the direct rank-1 server) and `toolHits` returns the matched tools with compact schema summaries.
-- **Heuristic intent classification** — each query is labeled `server` or `tool` (with confidence) via exact matches, action-cue/tool-name-overlap rules and a multi-tool aggregation rule; the `maxTools` cap widens on tool intent.
-- **Embedding fingerprint & auto-reindex signal** — the active embedding configuration (provider, model, dims, budget, pooling, indexer version) is recorded as a fingerprint. `/health` reports it alongside the fingerprint the index was last built with, and `needsReindex` flips when they diverge — an external orchestrator can watch that flag and reindex automatically (cooldown-protected).
+- **Heuristic intent classification** — each query is labeled `server` or `tool` (with confidence) via exact matches, action-cue/tool-name-overlap rules and a multi-tool aggregation rule; up to five hits per server are shown on tool intent.
+- **Embedding fingerprint & auto-reindex signal** — the active embedding configuration (provider, model, dimensions, input types, text budgets, pooling, indexer version) is recorded as a fingerprint. `/health` reports it alongside the fingerprint the index was last built with, and `needsReindex` flips when they diverge — an external orchestrator can watch that flag and reindex automatically (cooldown-protected).
 - **Faceted filtering** by tags and provider
 - **Pluggable adapter architecture** — swap search backends without changing business logic
 - **Admin API** for document ingestion with strict validation and normalization
@@ -33,7 +33,7 @@ SEARCH_BACKEND=memory npm run dev
 npm test
 ```
 
-> Semantic search is **off by default** — without `TOOLHUB_EMBEDDING_PROVIDER`, toolhub runs pure lexical search (zero memory overhead). To enable it, set `TOOLHUB_EMBEDDING_PROVIDER` **and** `TOOLHUB_EMBEDDING_BATCH_SIZE` (required, no default — see the embedding models guide). The local ONNX provider loads the `Xenova/multilingual-e5-small` model on first use (one-time download from the HuggingFace Hub, ~80 MB) and runs inference on your CPU — RAM usage scales with `TOOLHUB_EMBEDDING_BATCH_SIZE`, so on memory-constrained machines prefer the `openai-compatible` provider (zero local inference) or keep lexical-only. On any embedding failure the search silently falls back to lexical.
+> Semantic search is **off by default** — without `TOOLHUB_EMBEDDING_PROVIDER`, toolhub runs pure lexical search (zero memory overhead). To enable it, set `TOOLHUB_EMBEDDING_PROVIDER` **and** `TOOLHUB_EMBEDDING_BATCH_SIZE` (required, no default — see the embedding models guide). The local ONNX provider loads the `Xenova/multilingual-e5-small` model on first use (one-time download from the HuggingFace Hub, ~80 MB) and runs inference on your CPU — RAM usage scales with `TOOLHUB_EMBEDDING_BATCH_SIZE`, so on memory-constrained machines prefer the `openai-compatible` provider (zero local inference) or keep lexical-only. When a query embedding is unavailable, search falls back to lexical results.
 
 ## API Endpoints
 
@@ -195,6 +195,7 @@ All settings are via environment variables:
 | `TOOLHUB_MAX_TOOLS_EMBEDDED` | `64` | Max tools embedded per server |
 | `TOOLHUB_MAX_TOOL_DESC_CHARS` | `1200` | Tool description cap |
 | `TOOLHUB_MAX_TOOL_SCHEMA_CHARS` | `1200` | Tool input-schema cap |
+| `TOOLHUB_MAX_TOOL_SEMANTIC_CHARS` | `8000` | Total text cap for each embedded tool |
 | `TOOLHUB_RRF_K` | `60` | RRF constant for the rank fusion |
 | `TOOLHUB_DIRECT_SERVER_WEIGHT` | `0.55` | Weight of the direct server ranking |
 | `TOOLHUB_TOOL_ROLLUP_WEIGHT` | `0.45` | Weight of the tool rollup |
@@ -295,9 +296,9 @@ TOOLHUB_EMBEDDING_MAX_CHARS=4096
 Every model embeds into its **own vector space** — vectors from different models are not comparable and must not be mixed:
 
 1. Change the env vars (see above).
-2. **Reindex** (`POST /admin/reindex`). When the dimensionality changed, MeiliSearch rejects the old vector settings; toolhub detects this and automatically rebuilds the settings and wipes incompatible vectors (self-healing, verified with 384→1024 switches). The full reindex records the new embedding fingerprint.
+2. **Reindex** (`POST /admin/reindex`). Toolhub builds replacement indexes with the new vector settings and swaps them into place after indexing succeeds. The full reindex records the new embedding fingerprint. A failed build keeps the current indexes available.
 3. **Or automate it** — `/health` exposes `embedding.currentFingerprint` vs `activeFingerprint` and `needsReindex`. An external cron watching these fields can reindex automatically (cooldown-protected) — restarting toolhub after a config change is enough to flag the divergence.
-4. Start queries. During the transition, or if any single embedding fails, that query degrades to lexical-only search — never an error.
+4. Start queries. During a configuration transition, or if a query embedding fails, that query uses lexical search.
 
 #### Evaluations & baselines
 
@@ -319,7 +320,7 @@ Every model embeds into its **own vector space** — vectors from different mode
 - **Hybrid search & adaptive semantic ratio** — on MeiliSearch, vector and lexical matches are fused with an adaptive `semanticRatio` based on query length (0.3 for short queries $\le$ 2 words, 0.7 for long natural-language queries $\ge$ 5 words, 0.5 default).
 - **Merge** — server and tool rankings are fused with RRF (k=60): `score = 0.55 · rrf(serverRank) + 0.45 · rollup(toolRanks)`, where the rollup weights the top-5 tool ranks with a [1, .75, .55, .4, .3] decay and is **capped at `1/(k+1)`** so tool clusters can refine a server card but never outrank the direct rank-1 server.
 - **Intent** — evaluated in order: exact server match → `server` (0.95); exact tool match → `tool` (0.95); specific tool (top tool ≥ 0.35, beats the competing servers by the margin, action cue or tool-name overlap) → `tool`; 3+ strong (≥ 0.3) tool hits from one server in the top-10 → `server` (aggregation intent); otherwise the fallback. When the top server IS the tool's home server, the margin is measured against the best *other* server with a stricter threshold (+0.05), because a tool always embeds close to its own server.
-- **Fingerprint** — `v2|provider|model|dims|maxInputChars|charsPerToken|minChunkChars|poolingMode|indexer-2|compact-schema-1|toolIndexName` is recorded at each full reindex. Changing the embedding config (model, pooling, budget, ...) makes `/health` report `needsReindex: true`; an external orchestrator can reindex automatically on that signal (15-min cooldown, 60-min backoff are sensible guardrails).
+- **Fingerprint** — `v3` includes the provider, model, dimensions, input types, text budgets, pooling, and tool-index settings. Changes that affect vectors or indexed tool content make `/health` report `needsReindex: true`.
 
 #### Troubleshooting
 
@@ -331,10 +332,12 @@ Every model embeds into its **own vector space** — vectors from different mode
 | HTTP 429 | Host rate/quota limit exceeded — retried with backoff (default 3 attempts, `TOOLHUB_EMBEDDING_RETRIES`), honoring `Retry-After`; then this query falls back to lexical |
 | `Unexpected OpenAI-compatible embeddings response shape` | API schema changed — update `extractVector` in `src/embedder.ts` (tolerates the standard `data[0].embedding` + a nested `data[0].data`) |
 | API rejects `input_type` | Model is symmetric (e.g. OpenAI `text-embedding-3-*`) — unset `TOOLHUB_EMBEDDING_INPUT_TYPE_*`; or the values are wrong for the model (e.g. nemotron wants `passage`/`query`, not `search_document`/`search_query`) |
-| `_vectors` / settings task failure during reindex | Dimension change — automatic wipe-and-retry handles it; if the log shows repeated failures, verify `TOOLHUB_*_EMBEDDING_DIMENSIONS` matches the model |
+| `_vectors` / settings task failure during reindex | Verify that `TOOLHUB_*_EMBEDDING_DIMENSIONS` matches the model. Failed staging tasks leave the live indexes in place. |
 | Semantic results look wrong after switching models | Old vectors from the previous model are still indexed — reindex |
 
 ## Docker
+
+The document IDs changed to collision-resistant hashes. After updating an existing MeiliSearch deployment, run one full reindex to replace documents stored under the old IDs.
 
 ```bash
 # Build

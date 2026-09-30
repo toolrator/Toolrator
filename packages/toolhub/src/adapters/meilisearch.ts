@@ -16,6 +16,8 @@
 // ---------------------------------------------------------------------------
 
 import { MeiliSearch, type SearchResponse, type Index } from "meilisearch";
+import { randomUUID } from "node:crypto";
+import { encodeServerId } from "../tool-indexer.js";
 import type {
   EmbeddingMeta,
   IndexListEntry,
@@ -94,8 +96,39 @@ const TOOL_SORTABLE_ATTRIBUTES = ["updated_at"];
 const META_INDEX_NAME = "toolhub_meta";
 const META_DOC_ID = "embedding";
 
+function serverSettings(dimensions: number): Record<string, unknown> {
+  return {
+    filterableAttributes: FILTERABLE_ATTRIBUTES,
+    searchableAttributes: SEARCHABLE_ATTRIBUTES,
+    sortableAttributes: SORTABLE_ATTRIBUTES,
+    displayedAttributes: [
+      "id", "mcp_name", "display_name", "description", "tags", "provider",
+      "docs_url", "homepage_url", "base_url", "protocol_version",
+      "capabilities", "health_status", "updated_at",
+    ],
+    typoTolerance: { enabled: true, minWordSizeForTypos: { oneTypo: 4, twoTypos: 8 } },
+    ...(dimensions > 0 ? { embedders: { default: { source: "userProvided", dimensions } } } : {}),
+  };
+}
+
+function toolSettings(dimensions: number): Record<string, unknown> {
+  return {
+    searchableAttributes: TOOL_SEARCHABLE_ATTRIBUTES,
+    filterableAttributes: TOOL_FILTERABLE_ATTRIBUTES,
+    sortableAttributes: TOOL_SORTABLE_ATTRIBUTES,
+    displayedAttributes: [
+      "id", "server_mcp_name", "server_display_name", "tool_name",
+      "tool_description", "compact_schema", "provider", "tags", "health_status",
+      "server_base_url", "server_health_last_checked", "updated_at",
+    ],
+    typoTolerance: { enabled: true, minWordSizeForTypos: { oneTypo: 4, twoTypos: 8 } },
+    ...(dimensions > 0 ? { embedders: { default: { source: "userProvided", dimensions } } } : {}),
+  };
+}
+
 export class MeiliSearchAdapter implements SearchAdapter {
   readonly toolIndexEnabled: boolean;
+  readonly vectorSearchEnabled: boolean;
   private searchClient: MeiliSearch;
   private adminClient: MeiliSearch;
   private indexName: string;
@@ -112,6 +145,7 @@ export class MeiliSearchAdapter implements SearchAdapter {
     this.host = config.url;
     this.adminKey = config.adminKey;
     this.dimensions = config.dimensions ?? 384;
+    this.vectorSearchEnabled = this.dimensions > 0;
     this.toolIndexEnabled = config.toolIndexEnabled ?? true;
 
     // Use separate clients for search vs admin to respect key scoping.
@@ -133,7 +167,7 @@ export class MeiliSearchAdapter implements SearchAdapter {
    */
   async initialize(): Promise<void> {
     // Enable experimental features (vector store) first
-    try {
+    if (this.vectorSearchEnabled) try {
       const response = await fetch(`${this.host}/experimental-features`, {
         method: "PATCH",
         headers: {
@@ -149,93 +183,22 @@ export class MeiliSearchAdapter implements SearchAdapter {
       console.warn(`[meili] Warning: Failed to contact experimental-features endpoint:`, err);
     }
 
-    // Create the server index if it doesn't exist
-    try {
-      await this.adminClient.createIndex(this.indexName, {
-        primaryKey: "id",
-      });
-    } catch (err: unknown) {
-      // Index may already exist — MeiliSearch returns an error in that case.
-      // We check if it's a real error or just "index already exists".
-      const message = err instanceof Error ? err.message : String(err);
-      if (!message.includes("already exists")) {
-        // For task-based responses, the createIndex might return a task
-        // that we need to wait for. Let's be lenient here.
-        console.warn(`[meili] Index creation note: ${message}`);
-      }
-    }
+    await this.ensureIndex(this.indexName);
 
     // Wait for the index to be available, then configure settings
     const index = this.adminClient.index(this.indexName);
 
-    // Explicitly configure displayed attributes to prevent returning huge _vectors or internal semantic_text
-    const displayedAttributes = [
-      "id",
-      "mcp_name",
-      "display_name",
-      "description",
-      "tags",
-      "provider",
-      "docs_url",
-      "homepage_url",
-      "base_url",
-      "protocol_version",
-      "capabilities",
-      "health_status",
-      "updated_at",
-    ];
-
-    const settings: any = {
-      filterableAttributes: FILTERABLE_ATTRIBUTES,
-      searchableAttributes: SEARCHABLE_ATTRIBUTES,
-      sortableAttributes: SORTABLE_ATTRIBUTES,
-      displayedAttributes,
-      typoTolerance: {
-        enabled: true,
-        minWordSizeForTypos: {
-          oneTypo: 4,
-          twoTypos: 8,
-        },
-      },
-      embedders: {
-        default: {
-          source: "userProvided",
-          dimensions: this.dimensions,
-        },
-      },
-    };
-
-    try {
-      const task = await index.updateSettings(settings);
-      const finishedTask = await this.adminClient.waitForTask(task.taskUid, {
-        timeOutMs: 30_000,
-        intervalMs: 100,
-      });
-      if (finishedTask.status === "failed") {
-        throw new Error(finishedTask.error?.message || "Settings task failed");
-      }
-    } catch (err: any) {
-      const errMsg = err.message || String(err);
-      if (errMsg.includes("no vectors provided") || errMsg.includes("vector") || errMsg.includes("embedder")) {
-        console.warn("[meili] Pre-existing documents lack vectors. Wiping index to apply vector settings...");
-        await index.deleteAllDocuments();
-        const task = await index.updateSettings(settings);
-        const finishedTask = await this.adminClient.waitForTask(task.taskUid, {
-          timeOutMs: 30_000,
-          intervalMs: 100,
-        });
-        if (finishedTask.status === "failed") {
-          throw new Error(finishedTask.error?.message || "Settings task failed on retry");
-        }
-      } else {
-        throw err;
-      }
+    await this.ensureMetaIndex();
+    const previous = await this.readEmbeddingMeta();
+    const dimensionChange = previous && previous.dimensions !== this.dimensions;
+    if (dimensionChange) {
+      console.warn("[meili] Vector dimensions changed; keeping live settings until a staged reindex replaces the indexes");
+    } else {
+      await this.waitForSuccess((await index.updateSettings(serverSettings(this.dimensions))).taskUid, "server settings");
     }
 
-    await this.ensureMetaIndex();
-
     if (this.toolIndexEnabled) {
-      await this.initializeTools();
+      await this.initializeTools(!!dimensionChange);
     }
 
     console.log(`[meili] Index "${this.indexName}" initialized with search and vector settings`);
@@ -244,77 +207,12 @@ export class MeiliSearchAdapter implements SearchAdapter {
   /**
    * Ensure the tool index exists and has the correct settings.
    */
-  async initializeTools(): Promise<void> {
-    try {
-      await this.adminClient.createIndex(this.toolIndexName, {
-        primaryKey: "id",
-      });
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (!message.includes("already exists")) {
-        console.warn(`[meili] Tool index creation note: ${message}`);
-      }
-    }
+  async initializeTools(deferSettings = false): Promise<void> {
+    await this.ensureIndex(this.toolIndexName);
 
-    const index = this.adminClient.index(this.toolIndexName);
-    const settings: any = {
-      searchableAttributes: TOOL_SEARCHABLE_ATTRIBUTES,
-      filterableAttributes: TOOL_FILTERABLE_ATTRIBUTES,
-      sortableAttributes: TOOL_SORTABLE_ATTRIBUTES,
-      displayedAttributes: [
-        "id",
-        "server_mcp_name",
-        "server_display_name",
-        "tool_name",
-        "tool_description",
-        "compact_schema",
-        "provider",
-        "tags",
-        "health_status",
-        "server_base_url",
-        "server_health_last_checked",
-        "updated_at",
-      ],
-      typoTolerance: {
-        enabled: true,
-        minWordSizeForTypos: {
-          oneTypo: 4,
-          twoTypos: 8,
-        },
-      },
-      embedders: {
-        default: {
-          source: "userProvided",
-          dimensions: this.dimensions,
-        },
-      },
-    };
-
-    try {
-      const task = await index.updateSettings(settings);
-      const finishedTask = await this.adminClient.waitForTask(task.taskUid, {
-        timeOutMs: 30_000,
-        intervalMs: 100,
-      });
-      if (finishedTask.status === "failed") {
-        throw new Error(finishedTask.error?.message || "Tool settings task failed");
-      }
-    } catch (err: any) {
-      const errMsg = err.message || String(err);
-      if (errMsg.includes("no vectors provided") || errMsg.includes("vector") || errMsg.includes("embedder")) {
-        console.warn("[meili] Pre-existing tool documents lack vectors. Wiping tool index to apply vector settings...");
-        await index.deleteAllDocuments();
-        const task = await index.updateSettings(settings);
-        const finishedTask = await this.adminClient.waitForTask(task.taskUid, {
-          timeOutMs: 30_000,
-          intervalMs: 100,
-        });
-        if (finishedTask.status === "failed") {
-          throw new Error(finishedTask.error?.message || "Tool settings task failed on retry");
-        }
-      } else {
-        throw err;
-      }
+    if (!deferSettings) {
+      const index = this.adminClient.index(this.toolIndexName);
+      await this.waitForSuccess((await index.updateSettings(toolSettings(this.dimensions))).taskUid, "tool settings");
     }
 
     console.log(`[meili] Tool index "${this.toolIndexName}" initialized with search and vector settings`);
@@ -322,15 +220,16 @@ export class MeiliSearchAdapter implements SearchAdapter {
 
   /** Ensure the tiny metadata index exists (fingerprint storage). */
   private async ensureMetaIndex(): Promise<void> {
+    await this.ensureIndex(this.metaIndexName);
+  }
+
+  private async ensureIndex(name: string): Promise<void> {
     try {
-      await this.adminClient.createIndex(this.metaIndexName, {
-        primaryKey: "id",
-      });
+      const task = await this.adminClient.createIndex(name, { primaryKey: "id" });
+      await this.waitForSuccess(task.taskUid, `create index ${name}`);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      if (!message.includes("already exists")) {
-        console.warn(`[meili] Meta index creation note: ${message}`);
-      }
+      if (!message.includes("already exists")) throw err;
     }
   }
 
@@ -464,20 +363,14 @@ export class MeiliSearchAdapter implements SearchAdapter {
       const chunk = normalized.slice(i, i + CHUNK_SIZE);
       const task = await index.addDocuments(chunk);
       // Wait for the indexing task to complete
-      await this.adminClient.waitForTask(task.taskUid, {
-        timeOutMs: 30_000,
-        intervalMs: 100,
-      });
+      await this.waitForSuccess(task.taskUid, "index servers");
     }
   }
 
   async remove(mcpName: string): Promise<void> {
     const index = this.getAdminIndex();
     const task = await index.deleteDocument(encodeDocumentId(mcpName));
-    await this.adminClient.waitForTask(task.taskUid, {
-      timeOutMs: 10_000,
-      intervalMs: 100,
-    });
+    await this.waitForSuccess(task.taskUid, "remove server");
   }
 
   async getFacets(): Promise<Record<string, Record<string, number>>> {
@@ -514,10 +407,50 @@ export class MeiliSearchAdapter implements SearchAdapter {
   async clear(): Promise<void> {
     const index = this.getAdminIndex();
     const task = await index.deleteAllDocuments();
-    await this.adminClient.waitForTask(task.taskUid, {
-      timeOutMs: 10_000,
-      intervalMs: 100,
-    });
+    await this.waitForSuccess(task.taskUid, "clear servers");
+  }
+
+  async replaceAll(servers: SearchDocument[], tools: ToolDocument[]): Promise<void> {
+    const suffix = randomUUID().replace(/-/g, "");
+    const stagedServerName = `${this.indexName}_stage_${suffix}`;
+    const stagedToolName = `${this.toolIndexName}_stage_${suffix}`;
+    const stagedNames = this.toolIndexEnabled
+      ? [stagedServerName, stagedToolName]
+      : [stagedServerName];
+    let swapped = false;
+    try {
+      for (const name of stagedNames) {
+        await this.waitForSuccess((await this.adminClient.createIndex(name, { primaryKey: "id" })).taskUid, `create ${name}`);
+      }
+      const stagedServer = this.adminClient.index<SearchDocument>(stagedServerName);
+      await this.waitForSuccess((await stagedServer.updateSettings(serverSettings(this.dimensions))).taskUid, "stage server settings");
+      for (let i = 0; i < servers.length; i += 500) {
+        const documents = servers.slice(i, i + 500).map((doc) => ({ ...doc, id: encodeDocumentId(doc.mcp_name) }));
+        await this.waitForSuccess((await stagedServer.addDocuments(documents)).taskUid, "stage servers");
+      }
+
+      const swaps = [{ indexes: [this.indexName, stagedServerName] }];
+      if (this.toolIndexEnabled) {
+        const stagedTools = this.adminClient.index<ToolDocument>(stagedToolName);
+        await this.waitForSuccess((await stagedTools.updateSettings(toolSettings(this.dimensions))).taskUid, "stage tool settings");
+        for (let i = 0; i < tools.length; i += 500) {
+          await this.waitForSuccess((await stagedTools.addDocuments(tools.slice(i, i + 500))).taskUid, "stage tools");
+        }
+        swaps.push({ indexes: [this.toolIndexName, stagedToolName] });
+      }
+      await this.waitForSuccess((await this.adminClient.swapIndexes(swaps)).taskUid, "swap search indexes");
+      swapped = true;
+    } finally {
+      for (const name of stagedNames) {
+        try {
+          await this.waitForSuccess((await this.adminClient.deleteIndex(name)).taskUid, `remove temporary index ${name}`);
+        } catch (error) {
+          // A failed cleanup leaves an extra index but must not hide a failed swap.
+          console.warn(`[meili] Could not clean up temporary index ${name}:`, error);
+        }
+      }
+      if (swapped) console.log("[meili] Replaced search indexes after staged indexing completed");
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -531,22 +464,16 @@ export class MeiliSearchAdapter implements SearchAdapter {
     for (let i = 0; i < documents.length; i += CHUNK_SIZE) {
       const chunk = documents.slice(i, i + CHUNK_SIZE);
       const task = await index.addDocuments(chunk);
-      await this.adminClient.waitForTask(task.taskUid, {
-        timeOutMs: 30_000,
-        intervalMs: 100,
-      });
+      await this.waitForSuccess(task.taskUid, "index tools");
     }
   }
 
   async removeToolsByServer(mcpName: string): Promise<void> {
     const index = this.adminClient.index(this.toolIndexName);
     const filter = `server_mcp_name = "${sanitizeFilterValue(mcpName.toLowerCase())}"`;
+    let task: { taskUid: number };
     try {
-      const task = await index.deleteDocuments({ filter });
-      await this.adminClient.waitForTask(task.taskUid, {
-        timeOutMs: 30_000,
-        intervalMs: 100,
-      });
+      task = await index.deleteDocuments({ filter });
     } catch (err) {
       // Older Meili versions reject delete-by-filter; fall back to listing
       // matching documents and deleting them individually.
@@ -555,17 +482,16 @@ export class MeiliSearchAdapter implements SearchAdapter {
       if (docs.hits.length > 0) {
         await this.deleteTools(docs.hits.map((h) => h.id));
       }
+      return;
     }
+    await this.waitForSuccess(task.taskUid, "remove server tools");
   }
 
   async deleteTools(ids: string[]): Promise<void> {
     if (ids.length === 0) return;
     const index = this.adminClient.index(this.toolIndexName);
     const task = await index.deleteDocuments(ids);
-    await this.adminClient.waitForTask(task.taskUid, {
-      timeOutMs: 30_000,
-      intervalMs: 100,
-    });
+    await this.waitForSuccess(task.taskUid, "remove tools");
   }
 
   async searchTools(query: string, options?: ToolSearchOptions): Promise<ToolSearchResult> {
@@ -642,10 +568,7 @@ export class MeiliSearchAdapter implements SearchAdapter {
   async clearTools(): Promise<void> {
     const index = this.adminClient.index(this.toolIndexName);
     const task = await index.deleteAllDocuments();
-    await this.adminClient.waitForTask(task.taskUid, {
-      timeOutMs: 10_000,
-      intervalMs: 100,
-    });
+    await this.waitForSuccess(task.taskUid, "clear tools");
   }
 
   async getAllToolDocuments(): Promise<ToolDocument[]> {
@@ -746,10 +669,7 @@ export class MeiliSearchAdapter implements SearchAdapter {
   async writeEmbeddingMeta(meta: EmbeddingMeta): Promise<void> {
     const index = this.adminClient.index(this.metaIndexName);
     const task = await index.addDocuments([meta]);
-    await this.adminClient.waitForTask(task.taskUid, {
-      timeOutMs: 10_000,
-      intervalMs: 100,
-    });
+    await this.waitForSuccess(task.taskUid, "write embedding fingerprint");
   }
 
   // ---------------------------------------------------------------------------
@@ -763,6 +683,13 @@ export class MeiliSearchAdapter implements SearchAdapter {
   private getAdminIndex(): Index<SearchDocument> {
     return this.adminClient.index<SearchDocument>(this.indexName);
   }
+
+  private async waitForSuccess(taskUid: number, action: string): Promise<void> {
+    const task = await this.adminClient.waitForTask(taskUid, { timeOutMs: 30_000, intervalMs: 100 });
+    if (task.status !== "succeeded") {
+      throw new Error(`[meili] Could not ${action}: ${task.error?.message ?? task.status}`);
+    }
+  }
 }
 
 /**
@@ -774,8 +701,8 @@ function sanitizeFilterValue(value: string): string {
 }
 
 /**
- * Encodes mcp_name containing slashes or dots into a safe MeiliSearch document ID.
+ * Uses the same collision-resistant server id as the tool document builder.
  */
 function encodeDocumentId(mcpName: string): string {
-  return mcpName.trim().toLowerCase().replace(/\//g, "__").replace(/\./g, "_");
+  return encodeServerId(mcpName);
 }

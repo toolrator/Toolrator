@@ -49,6 +49,32 @@ function assertVectorClose(actual: number[], expected: number[], eps = 1e-9): vo
 }
 
 describe("OpenAICompatibleEmbedder", () => {
+  test("isolates one rejected input and retains successful siblings", async () => {
+    const fetchStub = stubFetch((_url, init) => {
+      const { input } = JSON.parse(String(init.body)) as { input: string[] };
+      if (input.includes("bad")) return jsonResponse({ error: { message: "invalid input" } }, 400);
+      return jsonResponse({ data: input.map((_, index) => ({ index, embedding: [1, 0] })) });
+    });
+    const embedder = new OpenAICompatibleEmbedder(
+      { ...baseOptions, dimensions: 2, retries: 1 }, quietLogger, fetchStub,
+    );
+    const vectors = await embedder.embedMany(["good", "bad", "also good"]);
+    assert.deepStrictEqual(vectors, [[1, 0], null, [1, 0]]);
+  });
+
+  test("never pools a vector from only some chunks of a failed document", async () => {
+    const fetchStub = stubFetch((_url, init) => {
+      const { input } = JSON.parse(String(init.body)) as { input: string[] };
+      if (input.includes("efgh")) return jsonResponse({ error: { message: "invalid input" } }, 400);
+      return jsonResponse({ data: input.map((_, index) => ({ index, embedding: [1, 0] })) });
+    });
+    const embedder = new OpenAICompatibleEmbedder(
+      { ...baseOptions, dimensions: 2, maxInputChars: 4, batchSize: 1, concurrency: 2, retries: 1 },
+      quietLogger, fetchStub,
+    );
+    assert.deepStrictEqual(await embedder.embedMany(["abcdefgh"]), [null]);
+  });
+
   test("embeds a single text with correct URL, auth header and payload", async () => {
     let capturedUrl = "";
     let capturedInit: RequestInit | undefined;

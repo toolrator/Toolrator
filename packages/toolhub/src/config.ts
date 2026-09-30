@@ -152,6 +152,9 @@ export interface SearchEngineConfig {
 
   /** Maximum compact schema chars embedded per tool. */
   maxToolSchemaChars: number;
+  maxToolSemanticChars: number;
+  maxDescriptionChars: number;
+  maxSemanticChars: number;
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): SearchEngineConfig {
@@ -190,6 +193,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     maxToolsEmbedded: readInt(env, "TOOLHUB_MAX_TOOLS_EMBEDDED", 64),
     maxToolDescChars: readInt(env, "TOOLHUB_MAX_TOOL_DESC_CHARS", 1200),
     maxToolSchemaChars: readInt(env, "TOOLHUB_MAX_TOOL_SCHEMA_CHARS", 1200),
+    maxToolSemanticChars: readInt(env, "TOOLHUB_MAX_TOOL_SEMANTIC_CHARS", 8000),
+    maxDescriptionChars: readInt(env, "TOOLHUB_MAX_DESCRIPTION_CHARS", 4096),
+    maxSemanticChars: readInt(env, "TOOLHUB_MAX_SEMANTIC_CHARS", 16000),
   };
 }
 

@@ -28,6 +28,7 @@ export interface MemorySearchAdapterOptions {
 
 export class MemorySearchAdapter implements SearchAdapter {
   readonly toolIndexEnabled: boolean;
+  readonly vectorSearchEnabled = false;
   private documents = new Map<string, SearchDocument>();
   private toolDocuments = new Map<string, ToolDocument>();
   private embeddingMeta: EmbeddingMeta | null = null;
@@ -107,6 +108,11 @@ export class MemorySearchAdapter implements SearchAdapter {
 
   async clear(): Promise<void> {
     this.documents.clear();
+  }
+
+  async replaceAll(servers: SearchDocument[], tools: ToolDocument[]): Promise<void> {
+    this.documents = new Map(servers.map((doc) => [doc.mcp_name.toLowerCase(), doc]));
+    this.toolDocuments = new Map(tools.map((doc) => [doc.id, doc]));
   }
 
   async getAllDocuments(): Promise<SearchDocument[]> {

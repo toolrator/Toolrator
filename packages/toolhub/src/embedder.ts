@@ -155,12 +155,6 @@ function requireEnvPositive(name: string, context: string): number {
   return value;
 }
 
-function envBoolean(name: string, fallback: boolean): boolean {
-  const raw = process.env[name];
-  if (raw === undefined || raw === "") return fallback;
-  return raw.trim().toLowerCase() !== "false" && raw.trim().toLowerCase() !== "0";
-}
-
 export function resolveLocalSpec(): ModelSpec {
   return {
     dimensions: envPositive("TOOLHUB_LOCAL_EMBEDDING_DIMENSIONS") ?? 384,
@@ -290,6 +284,8 @@ export function embeddingProfile(): {
   charsPerToken: number;
   minChunkChars: number;
   poolingMode: "weighted_mean" | "simple_mean";
+  inputTypeDoc?: string;
+  inputTypeQuery?: string;
 } {
   const kind = embeddingProviderKind();
   let model: string;
@@ -320,6 +316,12 @@ export function embeddingProfile(): {
     charsPerToken: envPositive("TOOLHUB_EMBEDDING_CHARS_PER_TOKEN") ?? DEFAULT_CHARS_PER_TOKEN,
     minChunkChars: envPositive("TOOLHUB_EMBEDDING_MIN_CHUNK_CHARS") ?? DEFAULT_MIN_CHUNK_CHARS,
     poolingMode: poolingMode(),
+    inputTypeDoc: kind === "openai-compatible"
+      ? process.env.TOOLHUB_EMBEDDING_INPUT_TYPE_DOC || resolveRemoteSpec(model).inputTypeDoc
+      : undefined,
+    inputTypeQuery: kind === "openai-compatible"
+      ? process.env.TOOLHUB_EMBEDDING_INPUT_TYPE_QUERY || resolveRemoteSpec(model).inputTypeQuery
+      : undefined,
   };
 }
 
@@ -347,7 +349,7 @@ export function chunkText(text: string, budget: number): string[] {
     }
     const window = remaining.slice(0, budget);
     const boundary = findBoundaryIndex(window);
-    const cut = boundary > 0 ? boundary : graphemeSafeHardCut(window, budget);
+    const cut = boundary > 0 ? boundary : graphemeSafeHardCut(remaining, budget);
     chunks.push(remaining.slice(0, cut));
     remaining = remaining.slice(cut);
   }
@@ -388,7 +390,7 @@ function lastSentenceBoundary(window: string): number {
         if (idx > best) best = idx + 1;
         break;
       }
-      idx = window.lastIndexOf(mark, idx - 1);
+      idx = idx === 0 ? -1 : window.lastIndexOf(mark, idx - 1);
     }
   }
   return best;
@@ -421,6 +423,13 @@ function graphemeSafeHardCut(window: string, budget: number): number {
     }
     boundaryIdx = length;
   }
+  if (boundaryIdx === 0) {
+    // An individual grapheme can exceed a tiny budget; preserve it and advance.
+    const first = typeof Intl !== "undefined" && (Intl as any).Segmenter
+      ? new (Intl as any).Segmenter(undefined, { granularity: "grapheme" }).segment(window)[Symbol.iterator]().next().value?.segment
+      : Array.from(window)[0];
+    boundaryIdx = first?.length ?? 1;
+  }
   // Never leave a dangling high surrogate at the cut point.
   if (boundaryIdx > 0 && boundaryIdx < window.length) {
     const unit = window.charCodeAt(boundaryIdx);
@@ -429,7 +438,7 @@ function graphemeSafeHardCut(window: string, budget: number): number {
       boundaryIdx += 1;
     }
   }
-  return Math.min(boundaryIdx, window.length);
+  return boundaryIdx;
 }
 
 function l2Normalize(vector: number[]): number[] {
@@ -714,8 +723,6 @@ export class OpenAICompatibleEmbedder implements EmbeddingProvider {
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.apiKey = options.apiKey;
     this.model = options.model || DEFAULT_REMOTE_MODEL;
-    this.inputTypeDoc = options.inputTypeDoc;
-    this.inputTypeQuery = options.inputTypeQuery;
     this.retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
     // Qwen3-8B is heavy (4096 dims): fewer parallel requests keep memory sane
     const eightBModel = /8b/i.test(this.model);
@@ -732,6 +739,8 @@ export class OpenAICompatibleEmbedder implements EmbeddingProvider {
     this.fetchImpl = fetchImpl;
 
     const spec = resolveRemoteSpec(this.model);
+    this.inputTypeDoc = options.inputTypeDoc ?? (spec.supportsInputType ? spec.inputTypeDoc : undefined);
+    this.inputTypeQuery = options.inputTypeQuery ?? (spec.supportsInputType ? spec.inputTypeQuery : undefined);
     this.dimensions = options.dimensions ?? spec.dimensions;
     this.maxInputChars = options.maxInputChars ?? spec.maxInputChars ?? computeBudget(spec);
 
@@ -784,6 +793,7 @@ export class OpenAICompatibleEmbedder implements EmbeddingProvider {
     // Work items: one entry per chunk, grouped per original text index.
     type WorkItem = { item: number; text: string; weight: number };
     const pending = new Set<number>();
+    const abandoned = new Set<number>();
     const chunked = new Map<number, WorkItem[]>();
     const pieces = new Map<number, Array<{ vector: number[]; weight: number }>>();
 
@@ -818,15 +828,23 @@ export class OpenAICompatibleEmbedder implements EmbeddingProvider {
 
       const runBatch = async (batch: WorkItem[]): Promise<void> => {
         try {
-          const vectors = await this.requestBatch(
+          const outcomes = await this.requestBatchIsolated(
             batch.map((w) => w.text),
             inputType
           );
           for (let i = 0; i < batch.length; i++) {
             const w = batch[i];
-            if (!vectors[i]) continue;
+            const outcome = outcomes[i];
+            if (outcome instanceof Error) {
+              pieces.delete(w.item);
+              this.lastEmbedErrors.set(w.item, outcome);
+              if (outcome instanceof EmbeddingContextError) failedContextItems.add(w.item);
+              else failedItems.add(w.item);
+              continue;
+            }
+            if (abandoned.has(w.item)) continue;
             const itemPieces = pieces.get(w.item) ?? [];
-            itemPieces.push({ vector: vectors[i] as number[], weight: w.weight });
+            itemPieces.push({ vector: outcome, weight: w.weight });
             pieces.set(w.item, itemPieces);
 
             const prev = chunked.get(w.item) ?? [];
@@ -835,9 +853,7 @@ export class OpenAICompatibleEmbedder implements EmbeddingProvider {
             if (prev.length === 0) pending.delete(w.item);
           }
         } catch (err) {
-          // The whole batch failed; items in it are retried (context) or
-          // abandoned (other errors). Any partially accumulated pieces for
-          // these items are dropped so we never pool a partial vector.
+          // Only configuration errors should escape per-item isolation.
           for (const w of batch) pieces.delete(w.item);
           if (err instanceof FatalEmbeddingError) {
             // Config-level failure (auth/unknown model): abort everything
@@ -861,6 +877,8 @@ export class OpenAICompatibleEmbedder implements EmbeddingProvider {
 
       for (const item of failedItems) {
         pending.delete(item);
+        abandoned.add(item);
+        pieces.delete(item);
         this.logger.warn(`[embedder] Embedding failed for item ${item} after retries — indexing without vector`);
       }
       if (failedContextItems.size > 0) {
@@ -869,6 +887,8 @@ export class OpenAICompatibleEmbedder implements EmbeddingProvider {
           // Cannot shrink further — give up on these items
           for (const item of failedContextItems) {
             pending.delete(item);
+            abandoned.add(item);
+            pieces.delete(item);
             this.logger.warn(`[embedder] Context overflow persists at minimum chunk size for item ${item} — indexing without vector`);
           }
         } else {
@@ -877,6 +897,7 @@ export class OpenAICompatibleEmbedder implements EmbeddingProvider {
             `[embedder] Context overflow on ${failedContextItems.size} item(s) — shrinking chunk budget to ${budget} chars and retrying`
           );
           for (const item of failedContextItems) {
+            pieces.delete(item);
             chunked.set(item, chunkFor(item, budget));
             pending.add(item);
           }
@@ -886,11 +907,29 @@ export class OpenAICompatibleEmbedder implements EmbeddingProvider {
 
     for (let i = 0; i < texts.length; i++) {
       const itemPieces = pieces.get(i);
-      if (itemPieces && itemPieces.length > 0) {
+      if (!abandoned.has(i) && !pending.has(i) && itemPieces && itemPieces.length > 0) {
         results[i] = poolVectors(itemPieces.map((p) => p.vector), itemPieces.map((p) => p.weight), poolingMode());
       }
     }
     return results;
+  }
+
+  private async requestBatchIsolated(texts: string[], inputType?: string): Promise<Array<number[] | Error>> {
+    try {
+      return await this.requestBatch(texts, inputType);
+    } catch (err) {
+      if (err instanceof FatalEmbeddingError) throw err;
+      const error = err instanceof Error ? err : new Error(String(err));
+      const isolatable = error instanceof EmbeddingContextError ||
+        /^OpenAI-compatible embeddings error 4\d\d:/.test(error.message);
+      if (!isolatable || texts.length <= 1) return texts.map(() => error);
+      const middle = Math.ceil(texts.length / 2);
+      const [left, right] = await Promise.all([
+        this.requestBatchIsolated(texts.slice(0, middle), inputType),
+        this.requestBatchIsolated(texts.slice(middle), inputType),
+      ]);
+      return [...left, ...right];
+    }
   }
 
   /**
@@ -984,27 +1023,12 @@ export class OpenAICompatibleEmbedder implements EmbeddingProvider {
             `\x1b[38;5;196;1m[embedder:API-ERROR]\x1b[0m HTTP ${response.status} from ${this.baseUrl}/embeddings: ${message}`
           );
           if (CONTEXT_ERROR_RE.test(message)) {
-            // One or more inputs exceed the context budget. Binary-split to
-            // isolate the offending input(s); a single remaining input that
-            // still overflows surfaces as EmbeddingContextError.
-            if (texts.length > 1) {
-              const mid = Math.ceil(texts.length / 2);
-              const left = await this.requestBatch(texts.slice(0, mid), inputType);
-              const right = await this.requestBatch(texts.slice(mid), inputType);
-              return [...left, ...right];
-            }
             throw new EmbeddingContextError(`Context overflow for input (${texts[0]?.length ?? 0} chars): ${message}`);
           }
           if (FATAL_ERROR_RE.test(message) || response.status === 401 || response.status === 403) {
             throw new FatalEmbeddingError(`OpenAI-compatible embeddings error ${response.status}: ${message}`);
           }
-          // Generic 4xx — binary-split to isolate the bad input
-          if (texts.length > 1) {
-            const mid = Math.ceil(texts.length / 2);
-            const left = await this.requestBatch(texts.slice(0, mid), inputType);
-            const right = await this.requestBatch(texts.slice(mid), inputType);
-            return [...left, ...right];
-          }
+          // Isolation happens in requestBatchIsolated so successful siblings survive.
           throw new EmbeddingItemError(`OpenAI-compatible embeddings error ${response.status}: ${message}`);
         }
 
@@ -1015,7 +1039,12 @@ export class OpenAICompatibleEmbedder implements EmbeddingProvider {
           throw new EmbeddingItemError("Unexpected OpenAI-compatible embeddings response shape");
         }
         const vectors = extractVectors(payload);
-        if (vectors && vectors.length === texts.length) return vectors;
+        if (vectors && vectors.length === texts.length) {
+          if (!vectors.every((v) => v.every((n) => typeof n === "number" && Number.isFinite(n)))) {
+            throw new FatalEmbeddingError("Embedding response contains non-finite vector values");
+          }
+          return vectors;
+        }
         throw new EmbeddingItemError("Unexpected OpenAI-compatible embeddings response shape");
       } catch (err) {
         if (err instanceof EmbeddingContextError) throw err;
@@ -1167,5 +1196,3 @@ export function createEmbedder(
       );
   }
 }
-
-export { envBoolean };
