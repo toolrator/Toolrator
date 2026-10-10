@@ -55,7 +55,7 @@
     "@huggingface/transformers": "4.3.0",
     "hono": "^4.6.11",
     "lru-cache": "^11.5.2",
-    "meilisearch": "^0.48.0"
+    "meilisearch": "^0.62.0"
   },
   "devDependencies": {
     "@types/node": "^26.5.1",
