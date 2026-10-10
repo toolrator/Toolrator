@@ -116,6 +116,12 @@ export interface SearchEngineConfig {
 
   /** RRF k constant. */
   rrfK: number;
+  /** Multiplicative ranking bonus for verified publishers (0 = disabled). */
+  verifiedBoost: number;
+  /** Multiplicative ranking bonus weight for popularity (0 = disabled). */
+  popularityBoost: number;
+  /** Engagement count at which the popularity bonus is fully earned. */
+  popularitySaturation: number;
 
   /** Weight of the direct server score in the RRF merge. */
   directServerWeight: number;
@@ -181,6 +187,13 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     searchToolTopK: readInt(env, "TOOLHUB_SEARCH_TOOL_TOP_K", 50),
     maxToolHitsReturned: readInt(env, "TOOLHUB_MAX_TOOL_HITS_RETURNED", 10),
     rrfK: readInt(env, "TOOLHUB_RRF_K", 60),
+    // Kept small on purpose: RRF scores are nearly flat across ranks, so a
+    // large multiplier would let a weakly-matching verified hit climb ~20
+    // ranks. ~0.10 flips near-ties (the copycat case) without beating a
+    // clearly better text match more than a few ranks away.
+    verifiedBoost: readFloat(env, "TOOLHUB_VERIFIED_BOOST", 0.1),
+    popularityBoost: readFloat(env, "TOOLHUB_POPULARITY_BOOST", 0.08),
+    popularitySaturation: readInt(env, "TOOLHUB_POPULARITY_SATURATION", 1000),
     directServerWeight: readFloat(env, "TOOLHUB_DIRECT_SERVER_WEIGHT", 0.55),
     toolRollupWeight: readFloat(env, "TOOLHUB_TOOL_ROLLUP_WEIGHT", 0.45),
     intentEnabled: readBool(env, "TOOLHUB_INTENT_ENABLED", true),

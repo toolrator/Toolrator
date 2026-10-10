@@ -66,3 +66,41 @@ test("failed delete task is surfaced instead of treated as unsupported filter", 
   await assert.rejects(() => adapter.removeToolsByServer("example/server"), /simulated task failure/);
   assert.equal(actions.length, 1);
 });
+
+function mockSearchAdapter(search: (call: number) => Promise<unknown>) {
+  const adapter = new MeiliSearchAdapter({
+    url: "http://localhost:7700",
+    searchKey: "",
+    adminKey: "",
+    indexName: "mcp_servers",
+  });
+  let calls = 0;
+  const fakeIndex = {
+    search: async () => {
+      calls += 1;
+      return search(calls);
+    },
+  };
+  Object.assign(adapter, { searchClient: { index: () => fakeIndex } });
+  return { adapter, calls: () => calls };
+}
+
+test("transient Meilisearch timeouts are retried before failing a search", async () => {
+  const { adapter, calls } = mockSearchAdapter((call) => {
+    if (call < 3) {
+      throw Object.assign(new Error("408: Request Timeout"), { httpStatus: 408 });
+    }
+    return Promise.resolve({ hits: [], estimatedTotalHits: 0 });
+  });
+  const result = await adapter.search("query");
+  assert.equal(calls(), 3);
+  assert.equal(result.total, 0);
+});
+
+test("non-transient search errors are not retried", async () => {
+  const { adapter, calls } = mockSearchAdapter(() => {
+    throw Object.assign(new Error("invalid filter"), { httpStatus: 400 });
+  });
+  await assert.rejects(() => adapter.search("query"), /invalid filter/);
+  assert.equal(calls(), 1);
+});

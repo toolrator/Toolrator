@@ -104,7 +104,7 @@ function serverSettings(dimensions: number): Record<string, unknown> {
     displayedAttributes: [
       "id", "mcp_name", "display_name", "description", "tags", "provider",
       "docs_url", "homepage_url", "base_url", "protocol_version",
-      "capabilities", "health_status", "updated_at",
+      "capabilities", "health_status", "verified", "popularity", "updated_at",
     ],
     typoTolerance: { enabled: true, minWordSizeForTypos: { oneTypo: 4, twoTypos: 8 } },
     ...(dimensions > 0 ? { embedders: { default: { source: "userProvided", dimensions } } } : {}),
@@ -119,7 +119,8 @@ function toolSettings(dimensions: number): Record<string, unknown> {
     displayedAttributes: [
       "id", "server_mcp_name", "server_display_name", "tool_name",
       "tool_description", "compact_schema", "provider", "tags", "health_status",
-      "server_base_url", "server_health_last_checked", "updated_at",
+      "server_base_url", "server_health_last_checked", "server_verified",
+      "server_popularity", "updated_at",
     ],
     typoTolerance: { enabled: true, minWordSizeForTypos: { oneTypo: 4, twoTypos: 8 } },
     ...(dimensions > 0 ? { embedders: { default: { source: "userProvided", dimensions } } } : {}),
@@ -291,13 +292,13 @@ export class MeiliSearchAdapter implements SearchAdapter {
 
     let response: SearchResponse<SearchDocument>;
     try {
-      response = await index.search(query || null, searchParams);
+      response = await this.searchWithRetry(index, query || null, searchParams);
     } catch (err: unknown) {
       if (searchParams.vector || searchParams.hybrid) {
         console.warn(`[meili] Vector search failed (${err instanceof Error ? err.message : String(err)}) — falling back to lexical search`);
         delete searchParams.vector;
         delete searchParams.hybrid;
-        response = await index.search(query || null, searchParams);
+        response = await this.searchWithRetry(index, query || null, searchParams);
       } else {
         throw err;
       }
@@ -533,13 +534,13 @@ export class MeiliSearchAdapter implements SearchAdapter {
 
     let response: SearchResponse<ToolDocument>;
     try {
-      response = await index.search(query || null, searchParams);
+      response = await this.searchWithRetry(index, query || null, searchParams);
     } catch (err: unknown) {
       if (searchParams.vector || searchParams.hybrid) {
         console.warn(`[meili] Tool vector search failed (${err instanceof Error ? err.message : String(err)}) — falling back to lexical tool search`);
         delete searchParams.vector;
         delete searchParams.hybrid;
-        response = await index.search(query || null, searchParams);
+        response = await this.searchWithRetry(index, query || null, searchParams);
       } else {
         throw err;
       }
@@ -690,6 +691,51 @@ export class MeiliSearchAdapter implements SearchAdapter {
       throw new Error(`[meili] Could not ${action}: ${task.error?.message ?? task.status}`);
     }
   }
+
+  /**
+   * Search with bounded retries on transient backend failures. Meilisearch
+   * answers 408 Request Timeout while it is compacting/merging under load,
+   * which surfaced as user-facing /search 500s; a short backoff and retry
+   * rides out those bursts. Non-transient errors are rethrown immediately.
+   */
+  private async searchWithRetry<T extends Record<string, any>>(
+    index: Index<T>,
+    query: string | null,
+    params: Record<string, unknown>,
+    attempts = 3,
+  ): Promise<SearchResponse<T>> {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        return (await index.search(query as never, params as never)) as SearchResponse<T>;
+      } catch (err) {
+        lastError = err;
+        if (attempt === attempts || !isTransientMeiliError(err)) throw err;
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[meili] Search attempt ${attempt}/${attempts} failed transiently (${message}) — retrying`);
+        await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
+      }
+    }
+    throw lastError;
+  }
+}
+
+/**
+ * True for backend failures worth retrying (Meilisearch overload timeouts,
+ * gateway errors, network resets). Everything else is a real error.
+ */
+function isTransientMeiliError(err: unknown): boolean {
+  const e = err as {
+    httpStatus?: number;
+    status?: number;
+    response?: { status?: number };
+    cause?: { httpStatus?: number; status?: number; message?: string };
+    message?: string;
+  };
+  const status = e?.httpStatus ?? e?.status ?? e?.response?.status ?? e?.cause?.httpStatus ?? e?.cause?.status;
+  if (typeof status === "number" && [408, 429, 502, 503, 504].includes(status)) return true;
+  const message = `${e?.message ?? ""} ${e?.cause?.message ?? ""}`;
+  return /\b(408|429|502|503|504)\b|timed? ?out|timeout|fetch failed|ECONNRESET|ETIMEDOUT|ECONNREFUSED|socket hang up|network/i.test(message);
 }
 
 /**

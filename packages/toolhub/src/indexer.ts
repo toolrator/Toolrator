@@ -355,6 +355,8 @@ export class Indexer {
       protocol_version: nonEmptyString(raw.protocol_version),
       capabilities: isRecord(raw.capabilities) ? raw.capabilities : undefined,
       health_status: normalizeHealthStatus(raw.health_status),
+      verified: raw.verified === true,
+      popularity: normalizePopularity(raw.popularity),
       updated_at: nonEmptyString(raw.updated_at) ?? new Date().toISOString(),
     };
   }
@@ -435,6 +437,11 @@ function normalizeHealthStatus(value: unknown): string | undefined {
   const v = value.trim().toLowerCase();
   if (!v) return undefined;
   return v;
+}
+
+function normalizePopularity(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
+  return Math.trunc(value);
 }
 
 function sanitizeUrl(value: string | undefined): string | undefined {

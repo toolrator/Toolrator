@@ -4,7 +4,7 @@
 // Dense vectors for semantic hybrid search are produced by an interchangeable
 // embedding provider, selected at boot via TOOLHUB_EMBEDDING_PROVIDER:
 //
-//   local            (opt-in) Transformers.js (@xenova/transformers) running
+//   local            (opt-in) Transformers.js (@huggingface/transformers) running
 //                    an ONNX model on the local CPU. Model, vector
 //                    dimensionality and input length are configurable via
 //                    TOOLHUB_LOCAL_EMBEDDING_*. Fully offline after the
@@ -50,6 +50,8 @@
 // embedding fingerprint / auto-reindex feature). The search backend
 // automatically rebuilds its vector settings on a dimension change.
 // ---------------------------------------------------------------------------
+
+import { resolve } from "node:path";
 
 export interface EmbeddingProvider {
   /** Provider kind ("local" | "openai-compatible"). */
@@ -509,19 +511,23 @@ export class Embedder implements EmbeddingProvider {
       const t0 = performance.now();
       this.pipelinePromise = (async () => {
         // Dynamic import to avoid loading transformers during boot before config check
-        const { pipeline, env } = await import("@xenova/transformers");
+        const { pipeline, env } = await import("@huggingface/transformers");
 
         // Disable telemetry/analytics and use standard defaults
         env.allowLocalModels = false; // Always fetch from HuggingFace Hub on first run
+        // A stable writable cache outside the dependency installation also works
+        // across CJS/ESM loaders and persists across library upgrades.
+        env.cacheDir = resolve(process.env.TOOLHUB_MODEL_CACHE || ".cache/transformers").replace(/\\/g, "/");
 
         // Allow pinning ONNX worker threads (useful for resource-constrained
         // environments where auto-detected thread counts cause oversubscription).
         const onnxThreads = Number(process.env.TOOLHUB_ONNX_THREADS);
         if (Number.isFinite(onnxThreads) && onnxThreads > 0) {
-          env.backends.onnx.numThreads = onnxThreads;
+          if (env.backends.onnx.wasm) env.backends.onnx.wasm.numThreads = onnxThreads;
         }
 
-        return pipeline("feature-extraction", modelName);
+        // Preserve the previous quantized model choice across the library upgrade.
+        return pipeline("feature-extraction", modelName, { dtype: "q8", device: "cpu" });
       })();
 
       this.pipelinePromise.then(
@@ -557,10 +563,10 @@ export class Embedder implements EmbeddingProvider {
   async embedMany(texts: string[], kind: "document" | "query" = "document"): Promise<Array<number[] | null>> {
     const prefix = kind === "query" ? "query: " : "passage: ";
     const budget = Math.max(1, this.maxInputChars - prefix.length);
+    const mode = poolingMode();
 
     const results: Array<number[] | null> = new Array(texts.length).fill(null);
     const batches: Array<{ text: string; weight: number; item: number }> = [];
-    const perItem: Array<{ vector: number[]; weight: number }[]> = new Array(texts.length).fill(null).map(() => []);
 
     for (let i = 0; i < texts.length; i++) {
       const text = texts[i] ?? "";
@@ -570,19 +576,50 @@ export class Embedder implements EmbeddingProvider {
         batches.push({ text: `${prefix}${chunk}`, weight: chunk.length, item: i });
       }
     }
+    if (batches.length === 0) return results;
 
-    const flat = await this.embedChunks(batches.map((b) => b.text));
-    if (flat && flat.length === batches.length) {
-      for (let b = 0; b < batches.length; b++) {
-        if (flat[b]) perItem[batches[b].item].push({ vector: flat[b], weight: batches[b].weight });
+    const dims = this.dimensions;
+    // Streaming pooling: every batch's chunk vectors are folded into per-item
+    // accumulators and released immediately. Materializing every chunk vector
+    // first (a full-catalog reindex is 300k+ chunks → gigabytes of JS arrays)
+    // previously sent the process into a GC death spiral that starved the
+    // event loop (150-200% CPU, /health unresponsive until restart). The math
+    // and summation order are identical to poolVectors().
+    const sums = new Map<number, Float64Array>();
+    const weights = new Map<number, number>();
+    let shapeOk = true;
+
+    const extractor = await this.getPipeline();
+    for (const batch of buildBatches(batches, this.batchSize, this.maxBatchChars)) {
+      const output = await extractor(batch.map((b) => b.text), { pooling: "mean", normalize: true });
+      const data = output.data as Float32Array;
+      if (data.length !== batch.length * dims) {
+        shapeOk = false;
+        break;
       }
+      for (let i = 0; i < batch.length; i++) {
+        const { item, weight } = batch[i];
+        let sum = sums.get(item);
+        if (!sum) {
+          sum = new Float64Array(dims);
+          sums.set(item, sum);
+        }
+        const w = mode === "weighted_mean" ? Math.max(1, weight ?? 1) : 1;
+        for (let d = 0; d < dims; d++) sum[d] += data[i * dims + d] * w;
+        weights.set(item, (weights.get(item) ?? 0) + w);
+      }
+      // Yield between forward passes so long embedding jobs keep serving /health.
+      await new Promise((resolve) => setImmediate(resolve));
     }
 
-    for (let i = 0; i < texts.length; i++) {
-      const parts = perItem[i];
-      if (parts.length === 0) continue;
-      const mode = poolingMode();
-      results[i] = poolVectors(parts.map((p) => p.vector), parts.map((p) => p.weight), mode);
+    // Unexpected batch shape → all nulls, the previous contract.
+    if (!shapeOk) return results;
+
+    for (const [item, sum] of sums) {
+      const totalWeight = weights.get(item) ?? 0;
+      const pooled = new Array<number>(dims);
+      for (let d = 0; d < dims; d++) pooled[d] = totalWeight > 0 ? sum[d] / totalWeight : sum[d];
+      results[item] = l2Normalize(pooled);
     }
     return results;
   }
@@ -594,43 +631,6 @@ export class Embedder implements EmbeddingProvider {
     return vector;
   }
 
-  /**
-   * Runs the ONNX model over a list of texts. The list is packed into
-   * bounded batches (by item count AND total characters, honoring
-   * TOOLHUB_EMBEDDING_BATCH_SIZE / TOOLHUB_EMBEDDING_MAX_BATCH_CHARS — the
-   * same knobs the remote provider uses) and each batch is a separate
-   * forward pass, executed sequentially so peak memory stays proportional
-   * to a single batch. A single unbounded pass over a real catalog (hundreds
-   * of documents, thousands of chunks) would otherwise allocate multi-GB
-   * intermediate tensors and OOM-crash the process.
-   *
-   * Returns an array of vectors aligned with the input list, or null when
-   * the batch shape is unexpected.
-   */
-  private async embedChunks(texts: string[]): Promise<number[][] | null> {
-    const extractor = await this.getPipeline();
-    if (texts.length === 0) return [];
-
-    // Batch size was validated at construction (required, no default) — it
-    // bounds peak RAM, so the operator picks it explicitly. Batches are
-    // count- AND char-bounded here: a single unbounded forward pass over a
-    // real catalog (hundreds of docs, thousands of chunks) previously
-    // allocated a multi-GB tensor and crashed.
-    const batchSize = this.batchSize;
-    const maxBatchChars = this.maxBatchChars;
-    const dims = this.dimensions;
-    const vectors: number[][] = [];
-
-    for (const batch of buildBatches(texts.map((text) => ({ text })), batchSize, maxBatchChars)) {
-      const output = await extractor(batch.map((b) => b.text), { pooling: "mean", normalize: true });
-      const data = output.data as Float32Array;
-      if (data.length !== batch.length * dims) return null;
-      for (let i = 0; i < batch.length; i++) {
-        vectors.push(Array.from(data.subarray(i * dims, (i + 1) * dims)));
-      }
-    }
-    return vectors;
-  }
 }
 
 // ---------------------------------------------------------------------------

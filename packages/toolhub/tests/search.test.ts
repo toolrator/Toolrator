@@ -5,7 +5,7 @@ import { SearchService } from "../src/search-service.js";
 import { Indexer } from "../src/indexer.js";
 import { loadConfig } from "../src/config.js";
 import type { EmbeddingProvider } from "../src/embedder.js";
-import { chunkText } from "../src/embedder.js";
+import { chunkText, Embedder, poolVectors } from "../src/embedder.js";
 import { encodeServerId, toolDocumentId } from "../src/tool-indexer.js";
 
 /**
@@ -417,5 +417,162 @@ describe("Toolhub - Embedding Chunking", () => {
       }
       assert.ok(batch.length <= 32, "batch exceeded batchSize");
     }
+  });
+});
+
+describe("Toolhub - Trust Ranking", () => {
+  test("Verified and popular servers outrank unverified copies at equal relevance", async () => {
+    const { service } = makeService();
+
+    // Identical descriptions = equal textual relevance. The unverified copy is
+    // indexed first so any stable-order tie-break favors it.
+    const docs: any[] = [
+      {
+        mcp_name: "toolrator-registry/copycat",
+        display_name: "Copycat",
+        description: "Search GitHub repositories and issues.",
+        tags: ["github"],
+      },
+      {
+        mcp_name: "toolrator-registry/official",
+        display_name: "Official",
+        description: "Search GitHub repositories and issues.",
+        tags: ["github"],
+        verified: true,
+      },
+      {
+        mcp_name: "toolrator-registry/hot",
+        display_name: "Hot",
+        description: "Search GitHub repositories and issues.",
+        tags: ["github"],
+        popularity: 500,
+      },
+    ];
+    await service.indexer.indexBatch(docs);
+
+    const result = await service.search("github", { limit: 5 });
+    const names = result.hits.map((h) => h.mcp_name);
+    assert.deepStrictEqual(names, [
+      "toolrator-registry/official",
+      "toolrator-registry/hot",
+      "toolrator-registry/copycat",
+    ]);
+  });
+
+  test("Within the same trust tier, stronger text matches still rank first", async () => {
+    const { service } = makeService();
+
+    const docs: any[] = [
+      {
+        mcp_name: "toolrator-registry/weak",
+        display_name: "Weak",
+        description: "Weather forecasts.",
+        tags: ["weather"],
+        verified: true,
+      },
+      {
+        mcp_name: "toolrator-registry/strong",
+        display_name: "Strong",
+        description: "GitHub issues, GitHub pull requests, GitHub repositories.",
+        tags: ["github"],
+        verified: true,
+      },
+    ];
+    await service.indexer.indexBatch(docs);
+
+    const result = await service.search("github", { limit: 5 });
+    assert.ok(result.hits.length >= 1);
+    assert.strictEqual(result.hits[0].mcp_name, "toolrator-registry/strong");
+  });
+
+  test("Popularity saturates instead of growing unbounded", async () => {
+    const { service } = makeService();
+
+    const docs: any[] = [
+      {
+        mcp_name: "toolrator-registry/plain",
+        display_name: "Plain",
+        description: "Search GitHub repositories and issues.",
+        tags: ["github"],
+      },
+      {
+        mcp_name: "toolrator-registry/huge",
+        display_name: "Huge",
+        description: "Search GitHub repositories and issues.",
+        tags: ["github"],
+        popularity: 1_000_000,
+      },
+    ];
+    await service.indexer.indexBatch(docs);
+
+    // A saturated popularity bonus (≤ 1 + 0.08) must not outweigh a genuine
+    // relevance gap of several ranks — both docs are near-ties here, so the
+    // popular one wins, but only just.
+    const result = await service.search("github", { limit: 5 });
+    assert.strictEqual(result.hits[0].mcp_name, "toolrator-registry/huge");
+  });
+});
+
+describe("local embedder streaming pooling", () => {
+  test("embedMany pooling is bit-identical to poolVectors across batches", async () => {
+    process.env.TOOLHUB_EMBEDDING_BATCH_SIZE = "2";
+    process.env.TOOLHUB_EMBEDDING_POOLING_MODE = "weighted_mean";
+    const quiet = { info: () => {}, warn: () => {}, error: () => {} };
+    const embedder = new Embedder(quiet);
+    const dims = embedder.dimensions;
+
+    // Deterministic fake ONNX pipeline: each text maps to a fixed vector.
+    // Values round through Float32Array to mirror what a real pipeline emits.
+    const fakeVector = (text: string): number[] => {
+      const v = new Float32Array(dims);
+      for (let d = 0; d < dims; d++) {
+        v[d] = ((text.charCodeAt(0) * 31 + text.length * 7 + d * 13) % 97) / 97;
+      }
+      return Array.from(v);
+    };
+    const fakeExtractor = async (texts: string[]) => {
+      const data = new Float32Array(texts.length * dims);
+      for (let i = 0; i < texts.length; i++) {
+        const v = fakeVector(texts[i]);
+        for (let d = 0; d < dims; d++) data[i * dims + d] = v[d];
+      }
+      return { data };
+    };
+    Object.assign(embedder, { pipelinePromise: Promise.resolve(fakeExtractor) });
+
+    const texts = [
+      "short doc",
+      "x".repeat(5000), // multi-chunk, straddles batch boundaries (batchSize=2)
+      "",
+      "mixed content. ".repeat(200),
+    ];
+    const results = await embedder.embedMany(texts, "document");
+
+    const budget = embedder.maxInputChars - "passage: ".length;
+    for (let i = 0; i < texts.length; i++) {
+      if (!texts[i]) {
+        assert.strictEqual(results[i], null);
+        continue;
+      }
+      const chunks = chunkText(texts[i], budget);
+      assert.ok(chunks.length >= 1);
+      const vecs = chunks.map((c) => fakeVector(`passage: ${c}`));
+      const expected = poolVectors(vecs, chunks.map((c) => c.length), "weighted_mean");
+      assert.ok(results[i], `result ${i} should be embedded`);
+      assert.strictEqual(results[i]!.length, dims);
+      // Exact float equality on purpose: the streaming fold must produce the
+      // same doubles in the same summation order as poolVectors.
+      for (let d = 0; d < dims; d++) assert.strictEqual(results[i]![d], expected[d]);
+    }
+  });
+
+  test("unexpected batch shape leaves results null", async () => {
+    process.env.TOOLHUB_EMBEDDING_BATCH_SIZE = "2";
+    const quiet = { info: () => {}, warn: () => {}, error: () => {} };
+    const embedder = new Embedder(quiet);
+    const badExtractor = async () => ({ data: new Float32Array(3) });
+    Object.assign(embedder, { pipelinePromise: Promise.resolve(badExtractor) });
+    const results = await embedder.embedMany(["a", "b"], "document");
+    assert.deepStrictEqual(results, [null, null]);
   });
 });

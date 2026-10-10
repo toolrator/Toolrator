@@ -7,6 +7,7 @@ A fast, typo-tolerant search engine for discovering MCP servers. Part of the too
 - **Full-text search** with typo tolerance (MeiliSearch) and prefix matching
 - **Semantic / hybrid search** — queries are vectorized by a pluggable embedding provider (opt-in: local ONNX `Xenova/multilingual-e5-small`, or any OpenAI-compatible API — Cloudflare Workers AI, OpenRouter, ... see the embedding models guide below) and fused with lexical results via MeiliSearch's hybrid search. Embeddings are **off by default** (`TOOLHUB_EMBEDDING_PROVIDER` unset → pure lexical search); semantic search activates only when a provider is configured. Lexical-only fallback when no vector is available (e.g. single short keywords, the in-memory backend, or an embedding failure).
 - **Tool-level ranking (D7 tool index)** — every tool from `capabilities.tools` is indexed as its own document (`mcp_tools`) and ranked by RRF against the server surface. Tool evidence rolls up into server cards (bounded: a tool cluster can never outrank the direct rank-1 server) and `toolHits` returns the matched tools with compact schema summaries.
+- **Trust ranking** — merged scores get a bounded trust multiplier: `verified` publishers receive a fixed bonus and `popularity` a log-scaled, saturating one (see `TOOLHUB_VERIFIED_BOOST` / `TOOLHUB_POPULARITY_BOOST` / `TOOLHUB_POPULARITY_SATURATION`), so an official server outranks an equally relevant unverified one.
 - **Heuristic intent classification** — each query is labeled `server` or `tool` (with confidence) via exact matches, action-cue/tool-name-overlap rules and a multi-tool aggregation rule; up to five hits per server are shown on tool intent.
 - **Embedding fingerprint & auto-reindex signal** — the active embedding configuration (provider, model, dimensions, input types, text budgets, pooling, indexer version) is recorded as a fingerprint. `/health` reports it alongside the fingerprint the index was last built with, and `needsReindex` flips when they diverge — an external orchestrator can watch that flag and reindex automatically (cooldown-protected).
 - **Faceted filtering** by tags and provider
@@ -14,7 +15,7 @@ A fast, typo-tolerant search engine for discovering MCP servers. Part of the too
 - **Admin API** for document ingestion with strict validation and normalization
 - **Result caching** — search results are cached (LRU, 60s TTL); admin writes evict the cache. Query embeddings are cached separately (LRU, 1h TTL).
 - **Two search backends:**
-  - **MeiliSearch** (recommended for production) — sub-50ms queries, typo tolerance, faceted search, and the only backend that supports semantic/hybrid search.
+  - **MeiliSearch** (recommended for production) — sub-50ms queries, typo tolerance, faceted search, and the only backend that supports semantic/hybrid search. Transient backend failures (408/429/5xx, network resets) are retried with backoff (3 attempts) before a search fails.
   - **In-memory** (for development/testing) — no external service required. Performs substring/lexical matching; typo tolerance and semantic search are not available in this mode.
 
 ## Quick Start
@@ -147,6 +148,8 @@ Each document is validated and normalized. Required and supported fields:
 | `protocol_version` | no | MCP protocol version. |
 | `capabilities` | no | Object (e.g. `{ "tools": [...] }`); powers `toolHits`. |
 | `health_status` | no | Free-text status string. |
+| `verified` | no | Publisher trust flag (`true`/`false`); adds a fixed trust-ranking bonus. |
+| `popularity` | no | Non-negative integer; adds a log-scaled, saturating trust-ranking bonus. |
 | `updated_at` | no | ISO-8601 timestamp; defaults to now if omitted. |
 
 Internally, each document gets a `semantic_text` summary and a precomputed embedding (`_vectors.default`, dimensions per the active provider/model) for hybrid search. Invalid documents are skipped (the response reports `indexed` vs `skipped` counts).
@@ -199,6 +202,9 @@ All settings are via environment variables:
 | `TOOLHUB_RRF_K` | `60` | RRF constant for the rank fusion |
 | `TOOLHUB_DIRECT_SERVER_WEIGHT` | `0.55` | Weight of the direct server ranking |
 | `TOOLHUB_TOOL_ROLLUP_WEIGHT` | `0.45` | Weight of the tool rollup |
+| `TOOLHUB_VERIFIED_BOOST` | `0.1` | Trust-ranking bonus for `verified` servers |
+| `TOOLHUB_POPULARITY_BOOST` | `0.08` | Max trust-ranking bonus from `popularity` (log-scaled, saturating) |
+| `TOOLHUB_POPULARITY_SATURATION` | `1000` | Popularity value that maps to the full bonus |
 | `TOOLHUB_SEARCH_SERVER_TOP_K` | `20` | Server docs fetched per query |
 | `TOOLHUB_SEARCH_TOOL_TOP_K` | `50` | Tool docs fetched per query |
 | `TOOLHUB_MAX_TOOL_HITS_RETURNED` | `10` | Max `toolHits` in the response |
@@ -318,7 +324,7 @@ Every model embeds into its **own vector space** — vectors from different mode
 #### Search quality design
 
 - **Hybrid search & adaptive semantic ratio** — on MeiliSearch, vector and lexical matches are fused with an adaptive `semanticRatio` based on query length (0.3 for short queries $\le$ 2 words, 0.7 for long natural-language queries $\ge$ 5 words, 0.5 default).
-- **Merge** — server and tool rankings are fused with RRF (k=60): `score = 0.55 · rrf(serverRank) + 0.45 · rollup(toolRanks)`, where the rollup weights the top-5 tool ranks with a [1, .75, .55, .4, .3] decay and is **capped at `1/(k+1)`** so tool clusters can refine a server card but never outrank the direct rank-1 server.
+- **Merge** — server and tool rankings are fused with RRF (k=60): `score = 0.55 · rrf(serverRank) + 0.45 · rollup(toolRanks)`, where the rollup weights the top-5 tool ranks with a [1, .75, .55, .4, .3] decay and is **capped at `1/(k+1)`** so tool clusters can refine a server card but never outrank the direct rank-1 server. Merged scores are then multiplied by a trust factor `1 + verifiedBoost · [verified] + popularityBoost · min(1, log10(1+popularity) / log10(1+popularitySaturation))` (defaults 0.1 / 0.08 / 1000).
 - **Intent** — evaluated in order: exact server match → `server` (0.95); exact tool match → `tool` (0.95); specific tool (top tool ≥ 0.35, beats the competing servers by the margin, action cue or tool-name overlap) → `tool`; 3+ strong (≥ 0.3) tool hits from one server in the top-10 → `server` (aggregation intent); otherwise the fallback. When the top server IS the tool's home server, the margin is measured against the best *other* server with a stricter threshold (+0.05), because a tool always embeds close to its own server.
 - **Fingerprint** — `v3` includes the provider, model, dimensions, input types, text budgets, pooling, and tool-index settings. Changes that affect vectors or indexed tool content make `/health` report `needsReindex: true`.
 
@@ -378,7 +384,7 @@ To add a new backend, implement the `SearchAdapter` interface in `src/adapters/`
 
 ## Known Issues
 
-- **Transitive dependency advisories** — `npm audit` reports vulnerabilities in `onnxruntime-web` and `sharp`, pulled in transitively via `@xenova/transformers` (used for local ONNX embeddings). The only automated remediation is a breaking downgrade to `@xenova/transformers@1.x`, which would change the embedder API. This is tracked.
+- Local embeddings use `@huggingface/transformers` with the quantized (`q8`) CPU model. Set `TOOLHUB_MODEL_CACHE` to persist downloaded models in a chosen directory. Model files are downloaded on first use; embedding inputs are processed locally.
 
 - **Loopback-only by default** — the server binds `127.0.0.1` (see `HOST`). To expose it to other machines, set `HOST=0.0.0.0` explicitly and put it behind a firewall/reverse proxy; the admin endpoints are only protected by `SEARCH_ADMIN_TOKEN`.
 - **Admin-token guard** — the server **refuses to start** when bound to a non-loopback interface (`HOST=0.0.0.0`) without a `SEARCH_ADMIN_TOKEN` (or with the legacy well-known `dev-admin-token`). Loopback binds with no token only print a warning, so local development keeps working. CORS is enabled on public routes only, never on `/admin/*`, and admin-token comparison is constant-time.

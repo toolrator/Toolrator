@@ -65,6 +65,12 @@ export interface SearchDocument {
   /** Health status from the last health check. */
   health_status?: string;
 
+  /** Whether the listing is confirmed to be operated by the vendor it names. */
+  verified?: boolean;
+
+  /** Weighted engagement counter (higher = more popular). Ranking hint only. */
+  popularity?: number;
+
   /** ISO 8601 timestamp of the last update. */
   updated_at?: string;
 }
@@ -109,6 +115,10 @@ export interface ToolDocument {
   /** Parent server display metadata needed to render tool cards. */
   server_provider?: string;
   server_health_last_checked?: string;
+
+  /** Parent server trust/ranking hints (denormalized). */
+  server_verified?: boolean;
+  server_popularity?: number;
 
   /** ISO 8601 timestamp of the last update. */
   updated_at?: string;

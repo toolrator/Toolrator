@@ -592,6 +592,8 @@ function rrfMerge(
           provider: best.provider,
           base_url: best.server_base_url,
           health_status: best.health_status,
+          verified: best.server_verified,
+          popularity: best.server_popularity,
           updated_at: best.updated_at,
           capabilities: { tools: [] },
         },
@@ -601,8 +603,27 @@ function rrfMerge(
   }
 
   return [...scores.values()]
+    .map((entry) => ({ ...entry, score: entry.score * trustFactor(entry.hit, config) }))
     .sort((a, b) => b.score - a.score)
     .map((entry) => entry.hit);
+}
+
+/**
+ * Trust/ranking multiplier: verified publishers get a fixed bonus and
+ * popularity contributes a log-scaled bonus, so an official server outranks a
+ * keyword-stuffed copy of similar textual relevance while a clearly better
+ * text match still wins. Bonuses are small on purpose — relevance dominates.
+ */
+function trustFactor(
+  hit: { verified?: boolean; popularity?: number },
+  config: SearchEngineConfig,
+): number {
+  const verifiedPart = hit.verified ? config.verifiedBoost : 0;
+  const pop = Math.max(0, hit.popularity ?? 0);
+  const saturation = Math.max(1, config.popularitySaturation);
+  const popularityPart =
+    config.popularityBoost * Math.min(1, Math.log10(1 + pop) / Math.log10(1 + saturation));
+  return 1 + verifiedPart + popularityPart;
 }
 
 const TOOL_ROLLUP_TOP_N = 5;

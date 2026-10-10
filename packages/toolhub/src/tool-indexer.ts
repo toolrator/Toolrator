@@ -69,6 +69,8 @@ export function buildToolDocumentsForServer(
       server_base_url: server.base_url,
       server_provider: server.provider,
       server_health_last_checked: server.updated_at,
+      server_verified: server.verified,
+      server_popularity: server.popularity,
       updated_at: updatedAt,
       semantic_text: semanticText,
       content_hash: server.content_hash ? `${server.content_hash}:tools:${hashString(semanticText)}` : hashString(semanticText),

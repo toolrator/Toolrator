@@ -1,4 +1,4 @@
-FROM node:20-slim AS build
+FROM node:22-slim AS build
 WORKDIR /srv
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -6,7 +6,7 @@ COPY src ./src
 COPY tsconfig.json ./
 RUN npm run build
 
-FROM node:20-slim
+FROM node:22-slim
 WORKDIR /srv
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libstdc++6 libgomp1 ca-certificates curl \
