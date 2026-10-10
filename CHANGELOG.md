@@ -11,8 +11,19 @@ Package versions are independent; each version heading identifies its package an
 ### Changed
 
 - **Toolhub:** indexing swaps retain the active index on failure; embedding requests use bounded chunks, pooling, and retry handling.
+- **Toolhub:** transient Meilisearch failures (408/429/5xx, network resets) on search are retried with backoff before failing; the local embedding path streams chunk pooling (halves peak memory on full-catalog reindexes) and yields between batches so `/health` stays responsive during long embedding jobs.
 - Refreshed Toolhub's Hono lockfile to the patched release.
 - Baseline-update workflows check out `main` and rebase before pushing their generated changes.
+
+## [`@toolrator/toolconnector` 0.4.2](https://github.com/toolrator/Toolrator/releases/tag/toolconnector-v0.4.2) - 2026-10-10
+
+### Fixed
+
+- Legacy `initialize` openings now negotiate the protocol version properly: a client requesting `2026-07-28` receives a `2026-07-28` result (`resultType: "complete"` + `serverInfo` in `_meta`) instead of a hardcoded `2025-11-25` that modern IDEs refuse. Unsupported client versions still fall back to the server-chosen `2025-11-25`.
+
+### Added
+
+- Anonymous usage telemetry — events carry only `{ name, action, ok, v }` (no query text, tool arguments, results, or identity) and are batched to the upstream `/api/usage/events` with bounded queues and best-effort delivery. Kill switch: `TOOLRATOR_TELEMETRY=off`.
 
 ## [`@toolrator/toolconnector` 0.4.1](https://github.com/toolrator/Toolrator/releases/tag/toolconnector-v0.4.1) - 2026-09-30
 

@@ -65,6 +65,8 @@ export function registerAllTools(
   },
   onRefreshSearchConfig?: (apiKey?: string) => Promise<boolean>,
   onOAuthLogin?: (accessToken: string) => Promise<boolean>,
+  /** Anonymous usage telemetry (name/action/ok only — see telemetry.ts). */
+  telemetry?: import("./telemetry.js").TelemetryClient,
 ): { updateSearchTool: () => void } {
   // Intercept tool registration: append the schema-staleness one-liner to ALL
   // tool text outputs (the transport layer in index.ts strips it and attaches
@@ -76,15 +78,21 @@ export function registerAllTools(
     const schema = (def && (def.inputSchema ?? def.paramsSchema)) ?? undefined;
     if (schema) registerCurrentSchema(name, schema);
     return originalRegisterTool(name, def, async (args: any, extra: any) => {
-      const result = await handler(args, extra);
-      if (result && Array.isArray(result.content)) {
-        for (const item of result.content) {
-          if (item.type === "text" && typeof item.text === "string") {
-            item.text = checkSchemaWarning(item.text);
+      try {
+        const result = await handler(args, extra);
+        if (result && Array.isArray(result.content)) {
+          for (const item of result.content) {
+            if (item.type === "text" && typeof item.text === "string") {
+              item.text = checkSchemaWarning(item.text);
+            }
           }
         }
+        telemetry?.recordFromToolCall(name, args, result);
+        return result;
+      } catch (err) {
+        telemetry?.recordFromToolCall(name, args, { isError: true });
+        throw err;
       }
-      return result;
     });
   };
 

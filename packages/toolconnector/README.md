@@ -10,7 +10,7 @@
 
 ## 🟢 Project Status
 
-**v0.4.1** — Three tools, OAuth-only interactive login, unified credential status, and corrected device-grant polling. Boot-time remote registry resolution is now bounded by a 4-second timeout, so an unreachable registry can no longer stall startup. Adopts [MCP 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28) (official stable revision: stateless, per-request capabilities, MRTR, Tasks extension). See [`MCP-FEATURES.md`](./MCP-FEATURES.md) for the full compliance matrix.
+**v0.4.2** — Proper protocol-version negotiation on the legacy `initialize` opening (a client requesting `2026-07-28` is no longer answered with `2025-11-25`, which modern IDEs refuse), plus anonymous usage telemetry (see [Usage telemetry](#-usage-telemetry-anonymous-opt-out)). Carries v0.4.1: three tools, OAuth-only interactive login, unified credential status, corrected device-grant polling, and a 4-second boot bound on remote registry resolution. Adopts [MCP 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28) (official stable revision: stateless, per-request capabilities, MRTR, Tasks extension). See [`MCP-FEATURES.md`](./MCP-FEATURES.md) for the full compliance matrix.
 
 **Requirements**: Node.js >= 20.
 
@@ -38,7 +38,24 @@ The **Toolconnector** is a lightweight, local **stdio Model Context Protocol (MC
 
 `toolconnector` acts as the **universal adapter**. By installing `toolconnector` locally, your local AI agent gains instant, secure, and authenticated access to any configured search-engine backend (via toolpanel or a compatible upstream) and external MCP servers.
 
-Version 0.4.1 exposes exactly **3 tools**, so the agent's context window carries three tool definitions instead of dozens. Interactive login uses OAuth; API keys remain supported as machine credentials.
+Version 0.4.2 exposes exactly **3 tools**, so the agent's context window carries three tool definitions instead of dozens. Interactive login uses OAuth; API keys remain supported as machine credentials.
+
+---
+
+## 📈 Usage telemetry (anonymous, opt-out)
+
+Toolconnector reports **anonymous aggregate usage** so the ecosystem can show which MCP servers are actually used. One event looks like this — it is the entire payload:
+
+```json
+{ "name": "https://example.com/mcp", "action": "call", "ok": true, "v": "0.4.2" }
+```
+
+`name` is the external server URL you called (or the search-engine id), `action` is `call` or `search`, `ok` is whether it succeeded, `v` is the connector version.
+
+**Never sent:** query text, tool names, tool arguments, tool results, user identity, your machine's hostname, cookies, or anything free-form.
+
+- Batches (capped at 50 events) are posted at most once a minute to the configured upstream (`/api/usage/events`), riding the authenticated channel when logged in. Telemetry is fire-and-forget: it never blocks or fails a tool call, failed batches are dropped rather than retried, and the in-memory queue is bounded (500 events, oldest dropped).
+- **Kill switch:** set `TOOLRATOR_TELEMETRY=off` in the MCP client's environment to disable telemetry entirely.
 
 ---
 

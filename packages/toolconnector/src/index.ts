@@ -16,6 +16,8 @@ import {
   buildStaleSuccessNotice,
 } from "./stale-schema.js";
 import { ExternalMcpClient } from "./mcp-client.js";
+import { SUPPORTED_PROTOCOL_VERSIONS, installInitializeNegotiation } from "./protocol.js";
+import { TelemetryClient, telemetryEnabledFromEnv } from "./telemetry.js";
 import { registerAllTools } from "./tools.js";
 import {
   loadSearchConfig,
@@ -50,7 +52,7 @@ export function createConnectorServer(): McpServer {
   return new McpServer(
     { name: "toolconnector", version: TOOLCONNECTOR_VERSION },
     {
-      supportedProtocolVersions: ["2026-07-28", "2025-11-25"],
+      supportedProtocolVersions: [...SUPPORTED_PROTOCOL_VERSIONS],
       capabilities: { tools: { listChanged: true } },
     },
   );
@@ -228,6 +230,17 @@ async function main(): Promise<void> {
   // 4. Create MCP server
   const server = createConnectorServer();
 
+  // Anonymous usage telemetry: name/action/ok only (see telemetry.ts for the
+  // privacy + abuse rules). Best-effort batches to the upstream usage
+  // endpoint; kill switch: TOOLRATOR_TELEMETRY=off.
+  const telemetry = new TelemetryClient({
+    endpoint: new URL("/api/usage/events", resolvedDefaultBaseUrl).toString(),
+    enabled: telemetryEnabledFromEnv(process.env.TOOLRATOR_TELEMETRY),
+    version: TOOLCONNECTOR_VERSION,
+    token: initialState.apiKey ?? null,
+    logger,
+  });
+
   // 5. Register all tools
   const { updateSearchTool } = registerAllTools(
     server,
@@ -244,6 +257,7 @@ async function main(): Promise<void> {
     // toolrator.org/mcp apply automatically. A 401 here means the token was
     // rejected; it must NOT log the user out (the OAuth entry stays for retry).
     (accessToken: string) => reresolveSearchConfig(accessToken, { skipLogoutOn401: true }),
+    telemetry,
   );
 
   // 6. Wire state changes to notifications/tools/list_changed
@@ -267,6 +281,15 @@ async function main(): Promise<void> {
   serveStdio(() => server, {
     transport,
     onerror: error => logger.error("Stdio protocol error", error),
+  });
+
+  // Legacy `initialize` openings get the SDK's 2025-era reply claiming
+  // 2025-11-25; this shim performs real version negotiation on that reply
+  // (echo the client's requested revision when supported, modern result shape
+  // for 2026-07-28) so modern clients can open via `initialize` too.
+  installInitializeNegotiation(transport, {
+    name: "toolconnector",
+    version: TOOLCONNECTOR_VERSION,
   });
 
   // -----------------------------------------------------------------------
@@ -358,6 +381,7 @@ async function main(): Promise<void> {
   // Clean up timer on exit
   process.on("exit", () => {
     clearInterval(activeRefreshLoop);
+    telemetry.stop();
   });
 }
 
