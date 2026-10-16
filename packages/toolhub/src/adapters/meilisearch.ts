@@ -105,6 +105,7 @@ function serverSettings(dimensions: number): Record<string, unknown> {
       "id", "mcp_name", "display_name", "description", "tags", "provider",
       "docs_url", "homepage_url", "base_url", "protocol_version",
       "capabilities", "health_status", "verified", "popularity", "updated_at",
+      "auth_status", "auth_source", "auth_methods",
     ],
     typoTolerance: { enabled: true, minWordSizeForTypos: { oneTypo: 4, twoTypos: 8 } },
     ...(dimensions > 0 ? { embedders: { default: { source: "userProvided", dimensions } } } : {}),
@@ -387,22 +388,24 @@ export class MeiliSearchAdapter implements SearchAdapter {
   }
 
   async getAllDocuments(): Promise<SearchDocument[]> {
-    const index = this.getAdminIndex();
-    const all: SearchDocument[] = [];
-    const batchSize = 1000;
-    let offset = 0;
+    return this.coalesceListing("getAllDocuments", async () => {
+      const index = this.getAdminIndex();
+      const all: SearchDocument[] = [];
+      let offset = 0;
 
-    while (true) {
-      const { results } = await index.getDocuments<SearchDocument>({
-        limit: batchSize,
-        offset,
-      });
-      if (results.length === 0) break;
-      all.push(...results);
-      offset += results.length;
-    }
+      while (true) {
+        const { results } = await this.getDocumentsWithRetry<SearchDocument>(index, {
+          limit: this.DUMP_PAGE_SIZE,
+          offset,
+        });
+        if (results.length === 0) break;
+        all.push(...results);
+        offset += results.length;
+        await MeiliSearchAdapter.yieldBetweenPages();
+      }
 
-    return all;
+      return all;
+    });
   }
 
   async clear(): Promise<void> {
@@ -573,76 +576,82 @@ export class MeiliSearchAdapter implements SearchAdapter {
   }
 
   async getAllToolDocuments(): Promise<ToolDocument[]> {
-    const index = this.adminClient.index(this.toolIndexName);
-    const all: ToolDocument[] = [];
-    const batchSize = 1000;
-    let offset = 0;
+    return this.coalesceListing("getAllToolDocuments", async () => {
+      const index = this.adminClient.index(this.toolIndexName);
+      const all: ToolDocument[] = [];
+      let offset = 0;
 
-    while (true) {
-      const { results } = await index.getDocuments<ToolDocument>({
-        limit: batchSize,
-        offset,
-      });
-      if (results.length === 0) break;
-      all.push(...results);
-      offset += results.length;
-    }
+      while (true) {
+        const { results } = await this.getDocumentsWithRetry<ToolDocument>(index, {
+          limit: this.DUMP_PAGE_SIZE,
+          offset,
+        });
+        if (results.length === 0) break;
+        all.push(...results);
+        offset += results.length;
+        await MeiliSearchAdapter.yieldBetweenPages();
+      }
 
-    return all;
+      return all;
+    });
   }
 
   async getIndexList(): Promise<IndexListEntry[]> {
-    const index = this.adminClient.index(this.indexName);
-    const entries: IndexListEntry[] = [];
-    const batchSize = 1000;
-    let offset = 0;
+    return this.coalesceListing("getIndexList", async () => {
+      const index = this.adminClient.index(this.indexName);
+      const entries: IndexListEntry[] = [];
+      let offset = 0;
 
-    while (true) {
-      const { results } = await index.getDocuments<SearchDocument>({
-        limit: batchSize,
-        offset,
-        fields: ["id", "mcp_name", "updated_at", "content_hash", "has_vector"],
-      });
-      if (results.length === 0) break;
-      for (const doc of results) {
-        entries.push({
-          id: doc.mcp_name,
-          updated_at: doc.updated_at,
-          content_hash: doc.content_hash,
-          has_vector: doc.has_vector ?? !!doc._vectors,
+      while (true) {
+        const { results } = await this.getDocumentsWithRetry<SearchDocument>(index, {
+          limit: this.LISTING_PAGE_SIZE,
+          offset,
+          fields: ["id", "mcp_name", "updated_at", "content_hash", "has_vector"],
         });
+        if (results.length === 0) break;
+        for (const doc of results) {
+          entries.push({
+            id: doc.mcp_name,
+            updated_at: doc.updated_at,
+            content_hash: doc.content_hash,
+            has_vector: doc.has_vector ?? !!doc._vectors,
+          });
+        }
+        offset += results.length;
+        await MeiliSearchAdapter.yieldBetweenPages();
       }
-      offset += results.length;
-    }
 
-    return entries;
+      return entries;
+    });
   }
 
   async getToolIndexList(): Promise<IndexListEntry[]> {
-    const index = this.adminClient.index(this.toolIndexName);
-    const entries: IndexListEntry[] = [];
-    const batchSize = 1000;
-    let offset = 0;
+    return this.coalesceListing("getToolIndexList", async () => {
+      const index = this.adminClient.index(this.toolIndexName);
+      const entries: IndexListEntry[] = [];
+      let offset = 0;
 
-    while (true) {
-      const { results } = await index.getDocuments<ToolDocument>({
-        limit: batchSize,
-        offset,
-        fields: ["id", "server_mcp_name", "updated_at", "content_hash", "has_vector"],
-      });
-      if (results.length === 0) break;
-      for (const doc of results) {
-        entries.push({
-          id: doc.id,
-          updated_at: doc.updated_at,
-          content_hash: doc.content_hash,
-          has_vector: doc.has_vector ?? !!doc._vectors,
+      while (true) {
+        const { results } = await this.getDocumentsWithRetry<ToolDocument>(index, {
+          limit: this.LISTING_PAGE_SIZE,
+          offset,
+          fields: ["id", "server_mcp_name", "updated_at", "content_hash", "has_vector"],
         });
+        if (results.length === 0) break;
+        for (const doc of results) {
+          entries.push({
+            id: doc.id,
+            updated_at: doc.updated_at,
+            content_hash: doc.content_hash,
+            has_vector: doc.has_vector ?? !!doc._vectors,
+          });
+        }
+        offset += results.length;
+        await MeiliSearchAdapter.yieldBetweenPages();
       }
-      offset += results.length;
-    }
 
-    return entries;
+      return entries;
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -690,6 +699,59 @@ export class MeiliSearchAdapter implements SearchAdapter {
     if (task.status !== "succeeded") {
       throw new Error(`[meili] Could not ${action}: ${task.error?.message ?? task.status}`);
     }
+  }
+
+  /** In-flight read-only enumerations keyed by method, so concurrent callers
+   *  (boot sync, cron, manual admin) share one backend scan instead of
+   *  stacking several full-collection scans on the search backend. */
+  private inflightListings = new Map<string, Promise<unknown>>();
+
+  /** Page size for light, field-projected listings. Large pages cut the
+   *  number of full-collection scans the backend must perform: 26k docs go
+   *  from 26 offset pages to 6 (measured: listing scans saturate a small
+   *  VM's CPU for minutes at 1000-doc pages). */
+  private readonly LISTING_PAGE_SIZE = 5000;
+
+  /** Page size for full-document exports — bounded by memory, not speed. */
+  private readonly DUMP_PAGE_SIZE = 1000;
+
+  private coalesceListing<T>(key: string, run: () => Promise<T>): Promise<T> {
+    const existing = this.inflightListings.get(key) as Promise<T> | undefined;
+    if (existing) return existing;
+    const promise = run().finally(() => this.inflightListings.delete(key));
+    this.inflightListings.set(key, promise);
+    return promise;
+  }
+
+  /** Yield to the event loop between listing pages so health and search
+   *  traffic keep being served while a long enumeration is in progress. */
+  private static yieldBetweenPages(): Promise<void> {
+    return new Promise((resolve) => setImmediate(resolve));
+  }
+
+  /**
+   * getDocuments with bounded retries on transient backend failures (see
+   *  searchWithRetry). Listings walk the whole collection and are the most
+   *  expensive reads we issue, so a 408/429 burst must not abort them.
+   */
+  private async getDocumentsWithRetry<T extends Record<string, any>>(
+    index: Index<T>,
+    params: Record<string, unknown>,
+    attempts = 3,
+  ): Promise<{ results: T[] }> {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        return await index.getDocuments<T>(params as never);
+      } catch (err) {
+        lastError = err;
+        if (attempt === attempts || !isTransientMeiliError(err)) throw err;
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[meili] getDocuments attempt ${attempt}/${attempts} failed transiently (${message}) — retrying`);
+        await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
+      }
+    }
+    throw lastError;
   }
 
   /**

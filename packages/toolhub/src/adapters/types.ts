@@ -71,6 +71,19 @@ export interface SearchDocument {
   /** Weighted engagement counter (higher = more popular). Ranking hint only. */
   popularity?: number;
 
+  /**
+   * Resolved auth gating: 'open' | 'partial' | 'required' | 'unknown'.
+   * 'open' means no sign-in was needed; it is never proof of that, so callers
+   * must word a non-publisher status as a finding rather than a fact.
+   */
+  auth_status?: string;
+
+  /** Where auth_status came from: 'publisher' | 'detected' | null. */
+  auth_source?: string | null;
+
+  /** Auth kinds observed for this listing, e.g. 'oauth2.1,bearer'. */
+  auth_methods?: string | null;
+
   /** ISO 8601 timestamp of the last update. */
   updated_at?: string;
 }

@@ -30,6 +30,43 @@ const MAX_TAGS = 20;
 /** Maximum length for text fields. */
 const MAX_DISPLAY_NAME_LENGTH = 256;
 
+/**
+ * MeiliSearch hard-rejects a document holding more than 65,535 fields, and it
+ * counts every nested key — so `capabilities.tools[].inputSchema` is charged
+ * field by field. A handful of registry servers blow through that with only a
+ * few dozen tools (measured: 80 tools → 133,528 fields), and because the whole
+ * *batch* is rejected, one such server silently dropped every other document
+ * it travelled with (prod, 2026-10-10).
+ *
+ * The budget below bounds what is stored in the SERVER document only. The tool
+ * index keeps the complete tool list: it stores one document per tool, so it
+ * never approaches the per-document ceiling.
+ */
+const MEILI_MAX_DOCUMENT_FIELDS = 65_535;
+
+/** Headroom under MeiliSearch's limit for the server document's own fields. */
+const SERVER_DOCUMENT_FIELD_BUDGET = 50_000;
+
+/** Recursively count the fields an object would contribute to a MeiliSearch document. */
+function countFields(value: unknown): number {
+  if (value === null || typeof value !== "object") return 1;
+  if (Array.isArray(value)) {
+    return value.reduce((sum: number, item) => sum + countFields(item), 1);
+  }
+  const record = value as Record<string, unknown>;
+  return Object.keys(record).reduce(
+    (sum, key) => sum + 1 + countFields(record[key]),
+    0,
+  );
+}
+
+/** Drop a tool's schema, keeping the fields a client needs to discover it. */
+function withoutToolSchema(tool: unknown): unknown {
+  if (!tool || typeof tool !== "object" || Array.isArray(tool)) return tool;
+  const { inputSchema: _inputSchema, parameters: _parameters, ...rest } = tool as Record<string, unknown>;
+  return rest;
+}
+
 export interface IndexBatchResult {
   /** Documents successfully indexed (with or without a vector). */
   indexed: number;
@@ -47,6 +84,8 @@ export interface IndexerOptions {
   /** Cap for the semantic text used for embedding (cost/latency bound). */
   maxSemanticChars?: number;
   toolBuildOptions?: ToolBuildOptions;
+  /** Field budget for the tool list stored in a server document. */
+  serverDocumentFieldBudget?: number;
 }
 
 function envPositiveInt(name: string, fallback: number): number {
@@ -77,6 +116,30 @@ export class Indexer {
 
   private get maxSemanticChars(): number {
     return this.options.maxSemanticChars ?? envPositiveInt("TOOLHUB_MAX_SEMANTIC_CHARS", 16000);
+  }
+
+  /**
+   * Field budget for the tool list stored in a server document. Overridable
+   * so the trimming logic can be exercised with small fixtures instead of
+   * megabyte schemas.
+   */
+  private get serverDocumentFieldBudget(): number {
+    return this.options.serverDocumentFieldBudget
+      ?? envPositiveInt("TOOLHUB_SERVER_FIELD_BUDGET", SERVER_DOCUMENT_FIELD_BUDGET);
+  }
+
+  /**
+   * How tool input schemas are stored in the SERVER document:
+   *  - "bounded" (default): full tools while they fit the field budget.
+   *  - "off": every tool is kept, minus its input schema — a small, uniform
+   *    field footprint that can never exhaust the index-wide path budget.
+   *    Tool-level search is unaffected: the tool index stores the searchable
+   *    schema as the `compact_schema` string (one field per tool document).
+   */
+  private get serverToolSchemaMode(): "bounded" | "off" {
+    return (process.env.TOOLHUB_SERVER_TOOL_SCHEMAS ?? "bounded").trim().toLowerCase() === "off"
+      ? "off"
+      : "bounded";
   }
 
   /**
@@ -114,10 +177,12 @@ export class Indexer {
       }
     }
 
-    await this.adapter.index(valid);
+    await this.adapter.index(valid.map((doc) => this.withBoundedCapabilities(doc)));
 
     let toolsIndexed = 0;
     if (rebuildTools && this.adapter.toolIndexEnabled) {
+      // Tool documents are built from the FULL capabilities, so trimming the
+      // server copy above never costs a server any of its searchable tools.
       toolsIndexed = await this.rebuildToolsForServers(valid);
     }
 
@@ -145,7 +210,7 @@ export class Indexer {
     }
     doc.content_hash = computeContentHash(doc);
 
-    await this.adapter.index([doc]);
+    await this.adapter.index([this.withBoundedCapabilities(doc)]);
     if (this.adapter.toolIndexEnabled) {
       await this.rebuildToolsForServers([doc]);
     }
@@ -227,7 +292,7 @@ export class Indexer {
       }
     }
 
-    await this.adapter.replaceAll(valid, docs);
+    await this.adapter.replaceAll(valid.map((doc) => this.withBoundedCapabilities(doc)), docs);
 
     this.logger.info(
       `[indexer] Indexed ${valid.length} documents (${skipped} skipped, ${indexedWithoutVector} without vector, ${toolsIndexed} tools)`
@@ -355,10 +420,70 @@ export class Indexer {
       protocol_version: nonEmptyString(raw.protocol_version),
       capabilities: isRecord(raw.capabilities) ? raw.capabilities : undefined,
       health_status: normalizeHealthStatus(raw.health_status),
+      auth_status: normalizeAuthStatus(raw.auth_status),
+      auth_source: normalizeAuthSource(raw.auth_source),
+      auth_methods: truncate(nonEmptyString(raw.auth_methods)?.toLowerCase(), 120),
       verified: raw.verified === true,
       popularity: normalizePopularity(raw.popularity),
       updated_at: nonEmptyString(raw.updated_at) ?? new Date().toISOString(),
     };
+  }
+
+  /**
+   * Keep a server document indexable by trimming its stored tool list to
+   * MeiliSearch's per-document field budget.
+   *
+   * Only the SERVER copy is trimmed — tool documents are built from the
+   * unbounded original, so no server ever loses searchable tools. A single
+   * tool whose schema alone exceeds the budget is still listed, minus its
+   * schema, so /mcp can keep advertising it.
+   */
+  private withBoundedCapabilities(doc: SearchDocument): SearchDocument {
+    const capabilities = doc.capabilities as Record<string, unknown> | undefined;
+    const tools = capabilities?.tools;
+    if (!Array.isArray(tools) || tools.length === 0) return doc;
+
+    // "off" mode: keep every tool but drop its input schema from the SERVER
+    // copy. MeiliSearch's 65,535-field limit is a per-INDEX budget (the union
+    // of all property paths), so raw tool schemas cannot live in server
+    // documents at registry scale — the tool index carries the searchable
+    // schema as `compact_schema` instead.
+    if (this.serverToolSchemaMode === "off") {
+      return {
+        ...doc,
+        capabilities: { ...capabilities, tools: tools.map(withoutToolSchema) },
+      };
+    }
+
+    const kept: unknown[] = [];
+    let used = 0;
+    let trimmed = false;
+    for (const tool of tools) {
+      const cost = countFields(tool);
+      if (used + cost <= this.serverDocumentFieldBudget) {
+        kept.push(tool);
+        used += cost;
+        continue;
+      }
+      // A tool too large to fit still has to be advertised — list it without
+      // its schema rather than dropping it entirely.
+      if (kept.length === 0) {
+        kept.push(withoutToolSchema(tool));
+      }
+      trimmed = true;
+      break;
+    }
+
+    // Note the flag, not a length comparison: a single oversized tool is
+    // replaced by its schema-less copy, which has the same length.
+    if (!trimmed) return doc;
+
+    this.logger.warn(
+      `[indexer] Document "${doc.mcp_name}" has ${tools.length} tool(s) whose schemas exceed ` +
+        `MeiliSearch's ${MEILI_MAX_DOCUMENT_FIELDS}-field document limit — storing ${kept.length} ` +
+        `in the server document (the tool index keeps all ${tools.length}).`,
+    );
+    return { ...doc, capabilities: { ...capabilities, tools: kept } };
   }
 
   /**
@@ -437,6 +562,23 @@ function normalizeHealthStatus(value: unknown): string | undefined {
   const v = value.trim().toLowerCase();
   if (!v) return undefined;
   return v;
+}
+
+// Auth gating is a closed vocabulary on purpose: anything else must not reach
+// the index, because the UI turns these values into user-facing claims.
+const AUTH_STATUSES = ["open", "partial", "required", "unknown"] as const;
+const AUTH_SOURCES = ["publisher", "detected"] as const;
+
+function normalizeAuthStatus(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const v = value.trim().toLowerCase();
+  return (AUTH_STATUSES as readonly string[]).includes(v) ? v : undefined;
+}
+
+function normalizeAuthSource(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const v = value.trim().toLowerCase();
+  return (AUTH_SOURCES as readonly string[]).includes(v) ? v : undefined;
 }
 
 function normalizePopularity(value: unknown): number | undefined {

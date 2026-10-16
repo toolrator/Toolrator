@@ -576,3 +576,153 @@ describe("local embedder streaming pooling", () => {
     assert.deepStrictEqual(results, [null, null]);
   });
 });
+
+describe("Indexer - per-document field budget", () => {
+  /**
+   * A tool whose input schema alone burns tens of thousands of MeiliSearch
+   * fields. MeiliSearch charges every array entry and every nested key against
+   * a 65,535-field per-document cap, and a giant `enum` is how registry servers
+   * realistically get there.
+   */
+  function pathologicalTool(name: string, enumSize: number): unknown {
+    return {
+      name,
+      description: `Tool ${name}`,
+      inputSchema: {
+        type: "object",
+        properties: {
+          value: {
+            type: "string",
+            description: "a value",
+            enum: Array.from({ length: enumSize }, (_, i) => `value_${i}`),
+          },
+        },
+        required: ["value"],
+      },
+    };
+  }
+
+  function storedTools(
+    adapter: MemorySearchAdapter,
+    mcpName: string,
+  ): Promise<Array<{ name: string; inputSchema?: unknown }>> {
+    return adapter.getByName(mcpName).then((doc) => {
+      assert.ok(doc, `expected "${mcpName}" to be indexed`);
+      return ((doc!.capabilities as { tools?: Array<{ name: string; inputSchema?: unknown }> })?.tools ?? []);
+    });
+  }
+
+  test("an oversized tool list is trimmed in the server document but kept whole in the tool index", async () => {
+    process.env.TOOLHUB_SERVER_FIELD_BUDGET = "500";
+    try {
+      const { adapter, service } = makeService();
+
+      // 8 tools x ~100 fields each = ~800, over the 500 budget but far below
+      // MeiliSearch's hard 65,535 cap for any single one of them.
+      const tools = Array.from({ length: 8 }, (_, i) => pathologicalTool(`tool_${i}`, 100));
+      const result = await service.indexer.indexBatch([
+        {
+          mcp_name: "pathological-server",
+          display_name: "Pathological Server",
+          description: "Schemas that would break a MeiliSearch batch.",
+          capabilities: { tools },
+        },
+      ]);
+
+      // One oversized document must not poison its batch — nothing is rejected.
+      assert.strictEqual(result.indexed, 1);
+      assert.strictEqual(result.skipped, 0);
+
+      const kept = await storedTools(adapter, "pathological-server");
+      assert.ok(kept.length > 0, "at least one tool should survive");
+      assert.ok(
+        kept.length < tools.length,
+        `expected the stored copy to be trimmed, got ${kept.length}/${tools.length}`,
+      );
+      // Trimming drops whole tools; survivors keep their full schema.
+      for (const tool of kept) assert.ok(tool.inputSchema, `tool "${tool.name}" should keep its schema`);
+
+      // The tool index still holds every tool, so search never loses them.
+      assert.strictEqual(result.toolsIndexed, tools.length);
+      assert.strictEqual(await adapter.getToolDocumentCount(), tools.length);
+    } finally {
+      delete process.env.TOOLHUB_SERVER_FIELD_BUDGET;
+    }
+  });
+
+  test("a single tool whose schema alone exceeds the budget is still listed, minus the schema", async () => {
+    process.env.TOOLHUB_SERVER_FIELD_BUDGET = "100";
+    try {
+      const { adapter, service } = makeService();
+
+      const result = await service.indexer.indexBatch([
+        {
+          mcp_name: "one-huge-tool",
+          display_name: "One Huge Tool",
+          capabilities: { tools: [pathologicalTool("gigantic", 500)] },
+        },
+      ]);
+
+      assert.strictEqual(result.indexed, 1);
+
+      const kept = await storedTools(adapter, "one-huge-tool");
+      assert.strictEqual(kept.length, 1, "the tool should still be advertised");
+      assert.strictEqual(kept[0].name, "gigantic");
+      assert.strictEqual(kept[0].inputSchema, undefined, "only the oversized schema is dropped");
+    } finally {
+      delete process.env.TOOLHUB_SERVER_FIELD_BUDGET;
+    }
+  });
+
+  test("documents within the budget keep their tools untouched", async () => {
+    process.env.TOOLHUB_SERVER_FIELD_BUDGET = "5000";
+    try {
+      const { adapter, service } = makeService();
+
+      await service.indexer.indexBatch([
+        {
+          mcp_name: "normal-server",
+          display_name: "Normal Server",
+          capabilities: { tools: [pathologicalTool("small", 5)] },
+        },
+      ]);
+
+      const kept = await storedTools(adapter, "normal-server");
+      assert.strictEqual(kept.length, 1);
+      assert.ok(kept[0].inputSchema, "a normal document must not be trimmed");
+    } finally {
+      delete process.env.TOOLHUB_SERVER_FIELD_BUDGET;
+    }
+  });
+
+  test("TOOLHUB_SERVER_TOOL_SCHEMAS=off keeps every tool but drops schemas from the server copy", async () => {
+    process.env.TOOLHUB_SERVER_TOOL_SCHEMAS = "off";
+    try {
+      const { adapter, service } = makeService();
+
+      const tools = Array.from({ length: 6 }, (_, i) => pathologicalTool(`tool_${i}`, 40));
+      const result = await service.indexer.indexBatch([
+        {
+          mcp_name: "schema-stripped-server",
+          display_name: "Schema Stripped Server",
+          capabilities: { tools },
+        },
+      ]);
+
+      assert.strictEqual(result.indexed, 1);
+
+      // Every tool survives in the server document, none with a schema.
+      const kept = await storedTools(adapter, "schema-stripped-server");
+      assert.strictEqual(kept.length, tools.length);
+      for (const tool of kept) {
+        assert.strictEqual(tool.inputSchema, undefined, `tool "${tool.name}" must not carry a schema`);
+      }
+
+      // The tool index still holds every tool, built from the full schemas.
+      assert.strictEqual(result.toolsIndexed, tools.length);
+      assert.strictEqual(await adapter.getToolDocumentCount(), tools.length);
+    } finally {
+      delete process.env.TOOLHUB_SERVER_TOOL_SCHEMAS;
+    }
+  });
+});

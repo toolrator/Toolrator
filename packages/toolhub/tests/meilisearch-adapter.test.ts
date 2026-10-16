@@ -104,3 +104,88 @@ test("non-transient search errors are not retried", async () => {
   await assert.rejects(() => adapter.search("query"), /invalid filter/);
   assert.equal(calls(), 1);
 });
+
+// ---------------------------------------------------------------------------
+// Listings (getIndexList / getAllDocuments) — pagination, retry, coalescing
+// ---------------------------------------------------------------------------
+
+function mockListingAdapter(
+  pages: Array<Array<Record<string, unknown>>> | ((call: number) => Array<Record<string, unknown>>),
+) {
+  const adapter = new MeiliSearchAdapter({
+    url: "http://localhost:7700",
+    searchKey: "",
+    adminKey: "",
+    indexName: "mcp_servers",
+  });
+  const calls: Array<Record<string, unknown>> = [];
+  const fakeIndex = {
+    getDocuments: (params: Record<string, unknown>) => {
+      calls.push(params);
+      const page = typeof pages === "function" ? pages(calls.length) : (pages[calls.length - 1] ?? []);
+      return Promise.resolve({ results: page });
+    },
+  };
+  Object.assign(adapter, { adminClient: { index: () => fakeIndex } });
+  return { adapter, calls: () => calls };
+}
+
+test("getIndexList pages until exhausted and projects only listing fields", async () => {
+  const { adapter, calls } = mockListingAdapter([
+    [
+      { id: "a", mcp_name: "mock/a", updated_at: "t1", content_hash: "h1", has_vector: true },
+      { id: "b", mcp_name: "mock/b", updated_at: "t2", content_hash: "h2" },
+    ],
+    [{ id: "c", mcp_name: "mock/c", updated_at: "t3", content_hash: "h3", _vectors: {} }],
+    [],
+  ]);
+  const list = await adapter.getIndexList();
+  assert.equal(calls().length, 3);
+  assert.equal(calls()[0].limit, 5000);
+  assert.deepEqual(calls()[0].fields, ["id", "mcp_name", "updated_at", "content_hash", "has_vector"]);
+  assert.deepEqual(list, [
+    { id: "mock/a", updated_at: "t1", content_hash: "h1", has_vector: true },
+    { id: "mock/b", updated_at: "t2", content_hash: "h2", has_vector: false },
+    { id: "mock/c", updated_at: "t3", content_hash: "h3", has_vector: true },
+  ]);
+});
+
+test("transient listing failures are retried before failing getIndexList", async () => {
+  const { adapter, calls } = mockListingAdapter((call) => {
+    if (call === 1) throw Object.assign(new Error("408: Request Timeout"), { httpStatus: 408 });
+    if (call === 2) return [{ id: "a", mcp_name: "mock/a", updated_at: "t1", content_hash: "h1" }];
+    return [];
+  });
+  const list = await adapter.getIndexList();
+  assert.equal(calls().length, 3);
+  assert.equal(list.length, 1);
+});
+
+test("non-transient listing errors are not retried", async () => {
+  const { adapter, calls } = mockListingAdapter(() => {
+    throw Object.assign(new Error("invalid request"), { httpStatus: 400 });
+  });
+  await assert.rejects(() => adapter.getIndexList(), /invalid request/);
+  assert.equal(calls().length, 1);
+});
+
+test("concurrent getIndexList calls share one backend scan", async () => {
+  const entry = { id: "a", mcp_name: "mock/a", updated_at: "t1", content_hash: "h1" };
+  const { adapter, calls } = mockListingAdapter((call) => {
+    if (call === 1 || call === 3) return [entry];
+    return [];
+  });
+  const [first, second] = await Promise.all([adapter.getIndexList(), adapter.getIndexList()]);
+  assert.equal(calls().length, 2); // one scan (page + empty terminator), not two
+  assert.deepEqual(first, second);
+  await adapter.getIndexList();
+  assert.equal(calls().length, 4); // a later call re-scans
+});
+
+test("getAllDocuments exports in memory-bounded pages without projection", async () => {
+  const { adapter, calls } = mockListingAdapter([[{ id: "a", mcp_name: "mock/a" }], []]);
+  const docs = await adapter.getAllDocuments();
+  assert.equal(calls()[0].limit, 1000);
+  assert.equal(calls()[0].fields, undefined);
+  assert.equal(docs.length, 1);
+});
