@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MeiliSearchAdapter } from "../src/adapters/meilisearch.js";
-import type { SearchDocument } from "../src/adapters/types.js";
+import type { SearchDocument, ToolDocument } from "../src/adapters/types.js";
 
 function mockAdapter(failAction?: string) {
   const adapter = new MeiliSearchAdapter({
@@ -188,4 +188,101 @@ test("getAllDocuments exports in memory-bounded pages without projection", async
   assert.equal(calls()[0].limit, 1000);
   assert.equal(calls()[0].fields, undefined);
   assert.equal(docs.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// userProvided embedder opt-out — Meilisearch rejects the WHOLE batch with
+// `vector_embedding_error` if any document lacks a usable `_vectors.default`.
+// Every document write path must therefore send `_vectors.default: null` for
+// documents without vectors (prod incident 2026-10-18: incremental sync
+// wiped server tool docs because their unembedded tail poisoned the batch).
+// ---------------------------------------------------------------------------
+
+function mockCaptureAdapter() {
+  const adapter = new MeiliSearchAdapter({
+    url: "http://localhost:7700",
+    searchKey: "",
+    adminKey: "",
+    indexName: "mcp_servers",
+    toolIndexName: "mcp_tools",
+    toolIndexEnabled: true,
+  });
+  const tasks = new Map<number, string>();
+  let nextTask = 1;
+  const task = (action: string) => {
+    const taskUid = nextTask++;
+    tasks.set(taskUid, action);
+    return { taskUid };
+  };
+  const captured: Array<{ index: string; documents: Array<Record<string, unknown>> }> = [];
+  const adminClient = {
+    createIndex: (name: string) => task(`create:${name}`),
+    deleteIndex: (name: string) => task(`delete:${name}`),
+    swapIndexes: () => task("swap"),
+    waitForTask: async (uid: number) => ({ status: tasks.has(uid) ? "succeeded" : "failed", error: null }),
+    index: (name: string) => ({
+      updateSettings: () => task(`settings:${name}`),
+      addDocuments: (documents: Array<Record<string, unknown>>) => {
+        captured.push({ index: name, documents });
+        return task(`documents:${name}`);
+      },
+      deleteDocuments: () => task(`deleteDocuments:${name}`),
+    }),
+  };
+  Object.assign(adapter, { adminClient });
+  return { adapter, captured };
+}
+
+function toolDoc(id: string, vectors?: number[]): ToolDocument {
+  return {
+    id,
+    server_mcp_name: "example/server",
+    server_display_name: "Example",
+    tool_name: id,
+    tool_description: `Tool ${id}`,
+    compact_schema: "{}",
+    tags: [],
+    ...(vectors ? { _vectors: { default: vectors } } : {}),
+  };
+}
+
+test("indexTools opts documents without vectors out of the userProvided embedder", async () => {
+  const { adapter, captured } = mockCaptureAdapter();
+  await adapter.indexTools([toolDoc("t1", [0.1, 0.2, 0.3]), toolDoc("t2")]);
+  assert.equal(captured.length, 1);
+  const [withVector, withoutVector] = captured[0].documents as Array<{ _vectors: Record<string, unknown> }>;
+  assert.deepEqual(withVector._vectors, { default: [0.1, 0.2, 0.3] });
+  assert.equal(withoutVector._vectors.default, null);
+});
+
+test("the vector opt-out preserves other embedder keys", async () => {
+  const { adapter, captured } = mockCaptureAdapter();
+  const doc: ToolDocument = { ...toolDoc("t3"), _vectors: { mini: [1, 2] } };
+  await adapter.indexTools([doc]);
+  const [sent] = captured[0].documents as Array<{ _vectors: Record<string, unknown> }>;
+  assert.deepEqual(sent._vectors, { mini: [1, 2], default: null });
+});
+
+test("server writes carry the same vector opt-out", async () => {
+  const { adapter, captured } = mockCaptureAdapter();
+  const doc = { id: "placeholder", mcp_name: "example/server", display_name: "Example" } as SearchDocument;
+  await adapter.index([doc]);
+  assert.equal(captured.length, 1);
+  const [sent] = captured[0].documents as Array<{ _vectors: Record<string, unknown> }>;
+  assert.equal(sent._vectors.default, null);
+});
+
+test("staged replaceAll writes carry the vector opt-out", async () => {
+  const { adapter, captured } = mockCaptureAdapter();
+  await adapter.replaceAll(
+    [{ id: "placeholder", mcp_name: "example/server", display_name: "Example" } as SearchDocument],
+    [toolDoc("t1"), toolDoc("t2", [0.1])],
+  );
+  const staged = captured.filter((entry) => entry.index.includes("_stage_"));
+  assert.equal(staged.length, 2);
+  const serverDocs = staged.find((entry) => entry.index.startsWith("mcp_servers_stage"))!.documents as Array<{ _vectors: Record<string, unknown> }>;
+  const toolDocs = staged.find((entry) => entry.index.startsWith("mcp_tools_stage"))!.documents as Array<{ _vectors: Record<string, unknown> }>;
+  assert.equal(serverDocs[0]._vectors.default, null);
+  assert.equal(toolDocs[0]._vectors.default, null);
+  assert.deepEqual(toolDocs[1]._vectors.default, [0.1]);
 });

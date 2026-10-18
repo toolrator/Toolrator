@@ -197,13 +197,36 @@ describe("Toolhub - In-Memory Tests", () => {
     assert.strictEqual(await adapter.getToolDocumentCount(), 0);
   });
 
-  test("Configured tool limits apply to incremental indexing", async () => {
-    const { adapter, service } = makeService({ TOOLHUB_MAX_TOOLS_EMBEDDED: "1" });
+  test("Configured embed limits apply to incremental indexing without dropping tool documents", async () => {
+    // TOOLHUB_MAX_TOOLS_EMBEDDED bounds EMBEDDING per server — it must never
+    // drop tool documents: the tool index is the complete tool list.
+    const adapter = new MemorySearchAdapter();
+    const config = loadConfig({
+      SEARCH_BACKEND: "memory",
+      PORT: "7600",
+      SEARCH_ADMIN_TOKEN: "test-token",
+      SEARCH_DEFAULT_LIMIT: "2",
+      SEARCH_MAX_LIMIT: "5",
+      TOOLHUB_MAX_TOOLS_EMBEDDED: "1",
+    });
+    const base = fakeEmbedder();
+    let embeddedTexts = 0;
+    const counting: EmbeddingProvider = {
+      ...base,
+      async embedMany(texts: string[]) {
+        embeddedTexts += texts.length;
+        return base.embedMany(texts);
+      },
+    };
+    const service = new SearchService(adapter, config, console, counting);
     await service.indexer.indexBatch([{
       mcp_name: "limited", display_name: "Limited", tags: [],
       capabilities: { tools: [{ name: "first" }, { name: "second" }] },
     }]);
-    assert.strictEqual(await adapter.getToolDocumentCount(), 1);
+    // Both tools stay searchable …
+    assert.strictEqual(await adapter.getToolDocumentCount(), 2);
+    // … but only the configured subset is embedded (1 tool + 1 server text).
+    assert.strictEqual(embeddedTexts, 2);
   });
 
   test("Invalid full reindex keeps existing documents", async () => {
@@ -659,16 +682,30 @@ describe("Indexer - per-document field budget", () => {
         {
           mcp_name: "one-huge-tool",
           display_name: "One Huge Tool",
-          capabilities: { tools: [pathologicalTool("gigantic", 500)] },
+          capabilities: {
+            tools: [
+              {
+                ...(pathologicalTool("gigantic", 500) as Record<string, unknown>),
+                // The fallback copy must not keep OTHER schema trees either:
+                // prod (2026-10-16) — 67,621 fields travelled through
+                // outputSchema enums + vendor metadata even with inputSchema
+                // already dropped, rejecting its whole batch.
+                outputSchema: { type: "object", properties: { out: { type: "string", enum: ["a", "b", "c"] } } },
+                _meta: { vendor_blob: "x".repeat(10) },
+              },
+            ],
+          },
         },
       ]);
 
       assert.strictEqual(result.indexed, 1);
 
-      const kept = await storedTools(adapter, "one-huge-tool");
+      const kept = (await storedTools(adapter, "one-huge-tool")) as Array<Record<string, unknown>>;
       assert.strictEqual(kept.length, 1, "the tool should still be advertised");
       assert.strictEqual(kept[0].name, "gigantic");
-      assert.strictEqual(kept[0].inputSchema, undefined, "only the oversized schema is dropped");
+      assert.strictEqual(kept[0].inputSchema, undefined, "the oversized schema is dropped");
+      assert.strictEqual(kept[0].outputSchema, undefined, "other schema trees are dropped too");
+      assert.strictEqual(kept[0]._meta, undefined, "vendor metadata is dropped too");
     } finally {
       delete process.env.TOOLHUB_SERVER_FIELD_BUDGET;
     }
@@ -695,6 +732,36 @@ describe("Indexer - per-document field budget", () => {
     }
   });
 
+  test("the server document caps its stored tool list while the tool index keeps every tool", async () => {
+    const { adapter, service } = makeService();
+
+    // 2,500 tiny tools ≈ 10k fields — within the 50k field budget, but every
+    // `capabilities.tools.{i}.{key}` path permanently burns one of
+    // Meilisearch's 65,535 per-index field IDs (meilisearch#3833), so the
+    // server copy is count-capped as well.
+    const tools = Array.from({ length: 2500 }, (_, i) => ({
+      name: `tool_${i}`,
+      description: `Tiny tool ${i}`,
+    }));
+    const result = await service.indexer.indexBatch([
+      {
+        mcp_name: "huge-tool-list",
+        display_name: "Huge Tool List",
+        capabilities: { tools },
+      },
+    ]);
+
+    assert.strictEqual(result.indexed, 1);
+
+    const kept = await storedTools(adapter, "huge-tool-list");
+    assert.strictEqual(kept.length, 2_000, "server copy capped at 2,000 tools");
+    assert.strictEqual(kept[0].name, "tool_0", "the cap keeps the head of the list deterministically");
+
+    // The tool index keeps every tool.
+    assert.strictEqual(result.toolsIndexed, tools.length);
+    assert.strictEqual(await adapter.getToolDocumentCount(), tools.length);
+  });
+
   test("TOOLHUB_SERVER_TOOL_SCHEMAS=off keeps every tool but drops schemas from the server copy", async () => {
     process.env.TOOLHUB_SERVER_TOOL_SCHEMAS = "off";
     try {
@@ -716,6 +783,10 @@ describe("Indexer - per-document field budget", () => {
       assert.strictEqual(kept.length, tools.length);
       for (const tool of kept) {
         assert.strictEqual(tool.inputSchema, undefined, `tool "${tool.name}" must not carry a schema`);
+        const rec = tool as Record<string, unknown>;
+        assert.strictEqual(rec.outputSchema, undefined, `tool "${tool.name}" must not carry an output schema`);
+        assert.strictEqual(typeof rec.compact_schema, "string", `tool "${tool.name}" keeps its schema as the compact string`);
+        assert.ok((rec.compact_schema as string).length > 0, "the compact schema should be non-empty");
       }
 
       // The tool index still holds every tool, built from the full schemas.
@@ -724,5 +795,220 @@ describe("Indexer - per-document field budget", () => {
     } finally {
       delete process.env.TOOLHUB_SERVER_TOOL_SCHEMAS;
     }
+  });
+
+  test("TOOLHUB_SERVER_TOOL_SCHEMAS=off bounds registry-scale documents under Meilisearch's field cap", async () => {
+    process.env.TOOLHUB_SERVER_TOOL_SCHEMAS = "off";
+    try {
+      const { adapter, service } = makeService();
+
+      /** MeiliSearch counts one field per nested key AND per array entry. */
+      const countFields = (value: unknown): number => {
+        if (value === null || typeof value !== "object") return 1;
+        if (Array.isArray(value)) return value.reduce((sum: number, item) => sum + countFields(item), 1);
+        return Object.keys(value as object).reduce(
+          (sum, key) => sum + 1 + countFields((value as Record<string, unknown>)[key]),
+          0,
+        );
+      };
+
+      // Shape of a real registry server (measured 2026-10-16): inputSchema is
+      // not the only schema tree — `outputSchema` enums and vendor metadata
+      // pushed one live document to 67,621 fields with inputSchema already
+      // dropped, rejecting its whole 250-doc batch.
+      const bigEnum = Array.from({ length: 3000 }, (_, i) => `value_${i}`);
+      const registryTool = (name: string): unknown => ({
+        name,
+        description: `Registry tool ${name}`,
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string", enum: bigEnum } },
+        },
+        outputSchema: {
+          type: "object",
+          properties: { result: { type: "string", enum: bigEnum } },
+        },
+        execution: { retries: 3, timeout: 1000, modes: bigEnum.slice(0, 500) },
+        _meta: Object.fromEntries(bigEnum.slice(0, 500).map((v) => [v, 1])),
+        annotations: { readOnlyHint: true, title: "Registry" },
+        tier: "pro",
+        pricing_metadata: { price: 1, currency: "USD" },
+      });
+
+      // 10 tools x ~7,500 fields ≈ 75,000 raw fields — over the 65,535 cap.
+      const tools = Array.from({ length: 10 }, (_, i) => registryTool(`tool_${i}`));
+      const result = await service.indexer.indexBatch([
+        {
+          mcp_name: "registry-scale-server",
+          display_name: "Registry Scale Server",
+          capabilities: { tools },
+        },
+      ]);
+
+      assert.strictEqual(result.indexed, 1);
+      assert.strictEqual(result.skipped, 0);
+
+      const kept = (await storedTools(adapter, "registry-scale-server")) as Array<Record<string, unknown>>;
+      assert.strictEqual(kept.length, tools.length, "no tool may be dropped");
+
+      // Arbitrary-keyed subtrees and vendor junk are gone; the searchable
+      // schema survives as the one-field compact_schema string.
+      for (const [i, tool] of kept.entries()) {
+        for (const banned of ["inputSchema", "outputSchema", "execution", "_meta", "tier", "pricing_metadata", "parameters"]) {
+          assert.strictEqual(tool[banned], undefined, `tool "${String(tool.name)}" must not carry "${banned}"`);
+        }
+        assert.strictEqual(typeof tool.compact_schema, "string");
+        assert.ok((tool.compact_schema as string).length > 0, "the compact schema should be non-empty");
+        assert.deepStrictEqual(tool.annotations, { readOnlyHint: true }, "only bounded hint flags survive");
+        assert.strictEqual(tool.name, `tool_${i}`);
+      }
+
+      // The whole server document stays an order of magnitude under the cap
+      // even though the raw tools would blow through it many times over.
+      assert.ok(countFields({ tools: kept }) < 2000, `stored tools cost ${countFields({ tools: kept })} fields`);
+      assert.ok(countFields({ tools }) > 65_535, "the raw fixture must exceed the cap to be a regression test");
+
+      // The tool index still holds every tool, built from the full schemas.
+      assert.strictEqual(result.toolsIndexed, tools.length);
+      assert.strictEqual(await adapter.getToolDocumentCount(), tools.length);
+    } finally {
+      delete process.env.TOOLHUB_SERVER_TOOL_SCHEMAS;
+    }
+  });
+
+  test("TOOLHUB_SERVER_TOOL_SCHEMAS=off still trims when the projected tool list alone exceeds the budget", async () => {
+    process.env.TOOLHUB_SERVER_TOOL_SCHEMAS = "off";
+    process.env.TOOLHUB_SERVER_FIELD_BUDGET = "500";
+    try {
+      const { adapter, service } = makeService();
+
+      const countFields = (value: unknown): number => {
+        if (value === null || typeof value !== "object") return 1;
+        if (Array.isArray(value)) return value.reduce((sum: number, item) => sum + countFields(item), 1);
+        return Object.keys(value as object).reduce(
+          (sum, key) => sum + 1 + countFields((value as Record<string, unknown>)[key]),
+          0,
+        );
+      };
+
+      // The projection bounds each tool but not their COUNT — prod
+      // (2026-10-17): an aggregator server's projected tool list alone
+      // exceeded MeiliSearch's 65,535-field document cap and rejected every
+      // batch it travelled in. 400 tiny tools × ~6 projected fields ≈ 2,400,
+      // over a 500 budget.
+      const tools = Array.from({ length: 400 }, (_, i) => ({
+        name: `tool_${i}`,
+        description: `Tiny tool ${i}`,
+        inputSchema: { type: "object", properties: { q: { type: "string" } } },
+      }));
+      const result = await service.indexer.indexBatch([
+        {
+          mcp_name: "aggregator-server",
+          display_name: "Aggregator Server",
+          capabilities: { tools },
+        },
+      ]);
+
+      assert.strictEqual(result.indexed, 1);
+      assert.strictEqual(result.skipped, 0);
+
+      const kept = (await storedTools(adapter, "aggregator-server")) as Array<Record<string, unknown>>;
+      assert.ok(kept.length > 0, "the head of the tool list must survive");
+      assert.ok(
+        kept.length < tools.length,
+        `expected the projected list to be trimmed, got ${kept.length}/${tools.length}`,
+      );
+      assert.ok(countFields({ tools: kept }) <= 502, `stored tools cost ${countFields({ tools: kept })} fields`);
+      for (const tool of kept) {
+        assert.strictEqual(tool.inputSchema, undefined, `tool "${String(tool.name)}" must not carry a schema`);
+      }
+
+      // The tool index still holds every tool, built from the full schemas.
+      assert.strictEqual(result.toolsIndexed, tools.length);
+      assert.strictEqual(await adapter.getToolDocumentCount(), tools.length);
+    } finally {
+      delete process.env.TOOLHUB_SERVER_FIELD_BUDGET;
+      delete process.env.TOOLHUB_SERVER_TOOL_SCHEMAS;
+    }
+  });
+});
+
+describe("Indexer - batched tool rebuild", () => {
+  test("every tool becomes a tool document while embedding stays bounded per server", async () => {
+    // The tool index is the COMPLETE tool list (the server document is what
+    // trims to Meilisearch's field budget), but embedding cost is capped at
+    // TOOLHUB_MAX_TOOLS_EMBEDDED per server — the remainder are stored
+    // lexically searchable with has_vector: false.
+    const adapter = new MemorySearchAdapter();
+    const config = loadConfig({
+      SEARCH_BACKEND: "memory",
+      PORT: "7600",
+      SEARCH_ADMIN_TOKEN: "test-token",
+      SEARCH_DEFAULT_LIMIT: "2",
+      SEARCH_MAX_LIMIT: "5",
+      TOOLHUB_MAX_TOOLS_EMBEDDED: "8",
+    });
+    const base = fakeEmbedder();
+    let embeddedTexts = 0;
+    const counting: EmbeddingProvider = {
+      ...base,
+      async embedMany(texts: string[]) {
+        embeddedTexts += texts.length;
+        return base.embedMany(texts);
+      },
+    };
+    const service = new SearchService(adapter, config, console, counting);
+
+    const tools = Array.from({ length: 40 }, (_, i) => ({
+      name: `tool_${i}`,
+      description: `Tool tool_${i}`,
+    }));
+    const result = await service.indexer.indexBatch([
+      {
+        mcp_name: "big-server",
+        display_name: "Big Server",
+        capabilities: { tools },
+      },
+    ]);
+
+    // The tool index holds every tool …
+    assert.strictEqual(result.toolsIndexed, tools.length);
+    assert.strictEqual(await adapter.getToolDocumentCount(), tools.length);
+
+    // …but only maxToolsEmbedded tool texts (+1 server text) are embedded.
+    assert.strictEqual(embeddedTexts, 1 + 8);
+  });
+
+  test("re-upserting a server replaces its tools and leaves other servers untouched", async () => {
+    const { adapter, service } = makeService();
+
+    const toolsFor = (names: string[]) =>
+      names.map((name) => ({ name, description: `Tool ${name}` }));
+
+    await service.indexer.indexBatch([
+      {
+        mcp_name: "server-a",
+        display_name: "Server A",
+        capabilities: { tools: toolsFor(["a1", "a2"]) },
+      },
+      {
+        mcp_name: "server-b",
+        display_name: "Server B",
+        capabilities: { tools: toolsFor(["b1"]) },
+      },
+    ]);
+    assert.strictEqual(await adapter.getToolDocumentCount(), 3);
+
+    // Server A sheds a1 and gains a3; server B is not in the batch at all.
+    await service.indexer.indexBatch([
+      {
+        mcp_name: "server-a",
+        display_name: "Server A",
+        capabilities: { tools: toolsFor(["a2", "a3"]) },
+      },
+    ]);
+
+    const names = (await adapter.getAllToolDocuments()).map((doc) => doc.tool_name).sort();
+    assert.deepStrictEqual(names, ["a2", "a3", "b1"], `unexpected tool set: ${names.join(", ")}`);
   });
 });

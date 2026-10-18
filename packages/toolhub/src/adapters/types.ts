@@ -406,6 +406,9 @@ export interface SearchAdapter {
   /** Remove all tool documents belonging to a server. */
   removeToolsByServer(mcpName: string): Promise<void>;
 
+  /** Remove all tool documents belonging to any of several servers in one operation. */
+  removeToolsByServers(mcpNames: string[]): Promise<void>;
+
   /** Remove tool documents by their document ids. */
   deleteTools(ids: string[]): Promise<void>;
 

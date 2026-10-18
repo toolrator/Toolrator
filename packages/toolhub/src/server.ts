@@ -103,6 +103,18 @@ export function createApp(
   // ── Public Endpoints ─────────────────────────────────────────────
 
   /**
+   * GET /health/live
+   * Liveness probe — answers without touching the search backend, so a
+   * busy-but-healthy server (heavy indexing, full MeiliSearch write queue)
+   * never looks dead: /health waits on backend stats and can take seconds
+   * under load, which made watchdogs restart a healthy service mid-rebuild
+   * (prod, 2026-10-16). A truly wedged event loop fails this route too, so
+   * watchdogs keep their real signal. Container healthchecks and external
+   * watchdogs use this route; /health keeps the full report for monitoring.
+   */
+  app.get("/health/live", (c) => c.json({ status: "ok", service: "toolhub" }));
+
+  /**
    * GET /health
    * Health check — includes backend connectivity and document count.
    */
@@ -330,6 +342,28 @@ export function createApp(
       success: true,
       ...result,
     });
+  });
+
+  /**
+   * POST /admin/embedding-fingerprint
+   * Record the current embedding config as the one the indexes were built
+   * with, WITHOUT re-indexing anything.
+   *
+   * Batched rebuilds (an external orchestrator pushing docs through
+   * /admin/sync in chunks) must be able to declare completion once they have
+   * verified every document is current — otherwise needsReindex stays true
+   * forever and every cron tick re-triggers a full rebuild that can never
+   * finish (registry-scale prod, 2026-10-16). Only call after verification:
+   * the fingerprint is the "vectors are current" claim.
+   */
+  admin.post("/embedding-fingerprint", async (c) => {
+    try {
+      await service.recordEmbeddingFingerprint();
+      return c.json({ success: true });
+    } catch (err) {
+      console.error("[admin/embedding-fingerprint] Failed to record fingerprint:", err);
+      return c.json({ error: "fingerprint_record_failed" }, 500);
+    }
   });
 
   /**

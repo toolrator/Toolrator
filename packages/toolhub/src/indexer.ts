@@ -19,7 +19,13 @@ import { createHash } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import type { SearchAdapter, SearchDocument } from "./adapters/types.js";
 import type { EmbeddingProvider } from "./embedder.js";
-import { buildToolDocuments, buildToolDocumentsForServer, type ToolBuildOptions } from "./tool-indexer.js";
+import {
+  buildToolDocuments,
+  buildToolDocumentsForServer,
+  pickEmbeddedDocs,
+  type ToolBuildOptions,
+} from "./tool-indexer.js";
+import { generateCompactSchema } from "./compact-schema.js";
 
 /** Allowed characters in mcp_name: lowercase alphanumeric, hyphens, underscores, dots, and slashes. */
 const MCP_NAME_REGEXP = /^[a-z0-9][a-z0-9._\/-]{0,127}$/;
@@ -31,21 +37,37 @@ const MAX_TAGS = 20;
 const MAX_DISPLAY_NAME_LENGTH = 256;
 
 /**
- * MeiliSearch hard-rejects a document holding more than 65,535 fields, and it
+ * MeiliSearch rejects a document holding more than 65,535 fields, and it
  * counts every nested key — so `capabilities.tools[].inputSchema` is charged
- * field by field. A handful of registry servers blow through that with only a
- * few dozen tools (measured: 80 tools → 133,528 fields), and because the whole
- * *batch* is rejected, one such server silently dropped every other document
- * it travelled with (prod, 2026-10-10).
+ * field by field. Two things are true about the limit
+ * (meilisearch/meilisearch#3833): it is checked per document, and the field-ID
+ * map behind it is per-INDEX — every distinct JSON path ever seen (e.g.
+ * `capabilities.tools.37.inputSchema.properties.x`) permanently consumes one
+ * of the 65,535 u16 field IDs shared by all documents. A handful of registry
+ * servers blow through both with only a few dozen tools (measured: 80 tools →
+ * 133,528 fields), and because MeiliSearch rejects the whole *batch*, one such
+ * server silently dropped every other document it travelled with (prod,
+ * 2026-10-10) — and months of raw schemas eventually exhausted the index's
+ * field-ID map outright, failing every push that introduced a new path (prod,
+ * 2026-10-17; recovery required a fresh-index swap).
  *
- * The budget below bounds what is stored in the SERVER document only. The tool
- * index keeps the complete tool list: it stores one document per tool, so it
- * never approaches the per-document ceiling.
+ * The budget and tool-count cap below bound what is stored in the SERVER
+ * document only. The tool index keeps the complete tool list: one document per
+ * tool with a fixed field set, so it burns almost no field IDs.
  */
 const MEILI_MAX_DOCUMENT_FIELDS = 65_535;
 
 /** Headroom under MeiliSearch's limit for the server document's own fields. */
 const SERVER_DOCUMENT_FIELD_BUDGET = 50_000;
+
+/**
+ * Hard cap on tools stored in a SERVER document (both schema modes). Each
+ * stored tool burns one field ID per `capabilities.tools.{i}.{key}` path —
+ * even fully projected, an unbounded tool list re-saturates the index's
+ * 65,535-ID map (meilisearch#3833). The tool index carries every tool; this
+ * bounds only the server document's advertising copy.
+ */
+const SERVER_DOCUMENT_MAX_TOOLS = 2_000;
 
 /** Recursively count the fields an object would contribute to a MeiliSearch document. */
 function countFields(value: unknown): number {
@@ -60,11 +82,70 @@ function countFields(value: unknown): number {
   );
 }
 
-/** Drop a tool's schema, keeping the fields a client needs to discover it. */
-function withoutToolSchema(tool: unknown): unknown {
+/**
+ * Uniform server-copy tool shape for `TOOLHUB_SERVER_TOOL_SCHEMAS=off`.
+ *
+ * A whitelist projection, not a blacklist: every arbitrary-keyed subtree
+ * (inputSchema, outputSchema, execution, _meta, vendor extensions) is
+ * dropped, because MeiliSearch charges one field per nested key AND per
+ * array entry against the 65,535-field per-document hard cap. Dropping
+ * `inputSchema` alone is NOT enough — measured on the live registry
+ * (2026-10-16): one server reached 67,621 fields through `outputSchema`
+ * `enum` trees and vendor metadata, and its presence rejected every batch
+ * it travelled in. Under this projection the worst live payload counts
+ * 9,002 fields.
+ *
+ * The searchable schema survives as the one-field `compact_schema` string,
+ * and the tool index keeps the complete tool entry. Per-tool cost is bounded,
+ * but tool COUNT is not: withBoundedCapabilities() enforces the server
+ * document's field budget on the projected list too — an aggregator server
+ * listing thousands of tools exceeded the cap through the projection alone
+ * (prod, 2026-10-17).
+ */
+const SERVER_TOOL_STRING_KEYS = {
+  name: 200,
+  title: 200,
+  description: 600,
+  summary: 600,
+  version: 60,
+  protocol: 60,
+} as const;
+const SERVER_TOOL_HINT_KEYS = [
+  "readOnlyHint",
+  "destructiveHint",
+  "idempotentHint",
+  "openWorldHint",
+] as const;
+const SERVER_TOOL_TAGS = 20;
+const SERVER_TOOL_COMPACT_SCHEMA_CHARS = 1200;
+
+function serverToolShape(tool: unknown): unknown {
   if (!tool || typeof tool !== "object" || Array.isArray(tool)) return tool;
-  const { inputSchema: _inputSchema, parameters: _parameters, ...rest } = tool as Record<string, unknown>;
-  return rest;
+  const src = tool as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [key, max] of Object.entries(SERVER_TOOL_STRING_KEYS)) {
+    const value = truncate(nonEmptyString(src[key]), max);
+    if (value) out[key] = value;
+  }
+  if (Array.isArray(src.tags)) {
+    const tags = src.tags
+      .filter((tag): tag is string => typeof tag === "string")
+      .slice(0, SERVER_TOOL_TAGS);
+    if (tags.length > 0) out.tags = tags;
+  }
+  for (const key of SERVER_TOOL_HINT_KEYS) {
+    if (typeof src[key] === "boolean") out[key] = src[key];
+  }
+  if (isRecord(src.annotations)) {
+    const hints: Record<string, unknown> = {};
+    for (const key of SERVER_TOOL_HINT_KEYS) {
+      if (typeof src.annotations[key] === "boolean") hints[key] = src.annotations[key];
+    }
+    if (Object.keys(hints).length > 0) out.annotations = hints;
+  }
+  const compact = generateCompactSchema(src.inputSchema, SERVER_TOOL_COMPACT_SCHEMA_CHARS);
+  if (compact) out.compact_schema = compact;
+  return out;
 }
 
 export interface IndexBatchResult {
@@ -131,10 +212,11 @@ export class Indexer {
   /**
    * How tool input schemas are stored in the SERVER document:
    *  - "bounded" (default): full tools while they fit the field budget.
-   *  - "off": every tool is kept, minus its input schema — a small, uniform
-   *    field footprint that can never exhaust the index-wide path budget.
-   *    Tool-level search is unaffected: the tool index stores the searchable
-   *    schema as the `compact_schema` string (one field per tool document).
+   *  - "off": every tool is kept as a uniform whitelist projection (see
+   *    serverToolShape) — a small, bounded field footprint that can never
+   *    approach the per-document cap. Tool-level search is unaffected: the
+   *    tool index stores the complete tool entry, and the server copy keeps
+   *    the searchable schema as the `compact_schema` string.
    */
   private get serverToolSchemaMode(): "bounded" | "off" {
     return (process.env.TOOLHUB_SERVER_TOOL_SCHEMAS ?? "bounded").trim().toLowerCase() === "off"
@@ -275,17 +357,21 @@ export class Indexer {
     if (this.adapter.toolIndexEnabled) {
       docs = buildToolDocuments(valid, this.toolBuildOptions);
       if (docs.length > 0) {
+        // Every tool is stored as a document; only the deterministic per-server
+        // subset is embedded (maxToolsEmbedded bounds embedding cost). The
+        // remainder stay lexically searchable with has_vector: false.
+        const embedTargets = pickEmbeddedDocs(docs, this.toolBuildOptions.maxToolsEmbedded);
         const toolVectors = await this.embedTexts(
-          docs.map((doc) => doc.semantic_text ?? ""),
+          embedTargets.map((doc) => doc.semantic_text ?? ""),
           "document",
         );
-        for (let i = 0; i < docs.length; i++) {
+        for (let i = 0; i < embedTargets.length; i++) {
           const vector = toolVectors[i];
           if (vector) {
-            docs[i]._vectors = { default: vector };
-            docs[i].has_vector = true;
+            embedTargets[i]._vectors = { default: vector };
+            embedTargets[i].has_vector = true;
           } else if (this.embedder.provider !== "null" && this.embedder.dimensions > 0) {
-            this.logger.warn(`[indexer] No vector for tool "${docs[i].tool_name}" of "${docs[i].server_mcp_name}"`);
+            this.logger.warn(`[indexer] No vector for tool "${embedTargets[i].tool_name}" of "${embedTargets[i].server_mcp_name}"`);
           }
         }
         toolsIndexed = docs.length;
@@ -328,22 +414,28 @@ export class Indexer {
       docs: buildToolDocumentsForServer(server, this.toolBuildOptions),
     }));
     const allDocs = perServer.flatMap((entry) => entry.docs);
-    const vectors = allDocs.length > 0
-      ? await this.embedTexts(allDocs.map((doc) => doc.semantic_text ?? ""), "document")
+    // Every tool is stored as a document; only the deterministic per-server
+    // subset is embedded (maxToolsEmbedded bounds embedding cost). The
+    // remainder stay lexically searchable with has_vector: false.
+    const embedTargets = pickEmbeddedDocs(allDocs, this.toolBuildOptions.maxToolsEmbedded);
+    const vectors = embedTargets.length > 0
+      ? await this.embedTexts(embedTargets.map((doc) => doc.semantic_text ?? ""), "document")
       : [];
-    for (let i = 0; i < allDocs.length; i++) {
+    for (let i = 0; i < embedTargets.length; i++) {
       if (vectors[i]) {
-        allDocs[i]._vectors = { default: vectors[i] as number[] };
-        allDocs[i].has_vector = true;
+        embedTargets[i]._vectors = { default: vectors[i] as number[] };
+        embedTargets[i].has_vector = true;
       } else if (this.embedder.provider !== "null" && this.embedder.dimensions > 0) {
-        this.logger.warn(`[indexer] No vector for tool "${allDocs[i].tool_name}" of "${allDocs[i].server_mcp_name}"`);
+        this.logger.warn(`[indexer] No vector for tool "${embedTargets[i].tool_name}" of "${embedTargets[i].server_mcp_name}"`);
       }
     }
 
-    await mapWithConcurrency(perServer, async ({ server, docs }) => {
-      await this.adapter.removeToolsByServer(server.mcp_name);
-      await this.adapter.indexTools(docs);
-    }, 4);
+    // One removal + one upsert for the whole batch. The previous per-server
+    // loop issued two MeiliSearch task round-trips per server — ~500 waits for
+    // a 250-document batch — which could not fit the caller's request budget
+    // and failed full rebuilds at registry scale (prod, 2026-10-16).
+    await this.adapter.removeToolsByServers(perServer.map((entry) => entry.server.mcp_name));
+    await this.adapter.indexTools(allDocs);
     return allDocs.length;
   }
 
@@ -431,7 +523,7 @@ export class Indexer {
 
   /**
    * Keep a server document indexable by trimming its stored tool list to
-   * MeiliSearch's per-document field budget.
+   * MeiliSearch's per-document field budget and the field-map-safe tool cap.
    *
    * Only the SERVER copy is trimmed — tool documents are built from the
    * unbounded original, so no server ever loses searchable tools. A single
@@ -443,43 +535,47 @@ export class Indexer {
     const tools = capabilities?.tools;
     if (!Array.isArray(tools) || tools.length === 0) return doc;
 
-    // "off" mode: keep every tool but drop its input schema from the SERVER
-    // copy. MeiliSearch's 65,535-field limit is a per-INDEX budget (the union
-    // of all property paths), so raw tool schemas cannot live in server
-    // documents at registry scale — the tool index carries the searchable
-    // schema as `compact_schema` instead.
-    if (this.serverToolSchemaMode === "off") {
-      return {
-        ...doc,
-        capabilities: { ...capabilities, tools: tools.map(withoutToolSchema) },
-      };
-    }
+    // "off" mode: whitelist-project every tool first (names, descriptions,
+    // hint flags, one-field `compact_schema` string). MeiliSearch's
+    // 65,535-field limit is a per-DOCUMENT hard cap counting every nested key
+    // and every array entry, so raw tool schemas cannot live in server
+    // documents at registry scale — the tool index carries the complete tool
+    // entries instead. The projection is NOT an exemption from the budget: an
+    // aggregator server's projected tool list alone blew through the cap
+    // (prod, 2026-10-17), so the budget below is enforced in BOTH modes.
+    const projected = this.serverToolSchemaMode === "off" ? tools.map(serverToolShape) : tools;
 
     const kept: unknown[] = [];
     let used = 0;
     let trimmed = false;
-    for (const tool of tools) {
+    for (const tool of projected) {
       const cost = countFields(tool);
-      if (used + cost <= this.serverDocumentFieldBudget) {
+      if (kept.length < SERVER_DOCUMENT_MAX_TOOLS && used + cost <= this.serverDocumentFieldBudget) {
         kept.push(tool);
         used += cost;
         continue;
       }
-      // A tool too large to fit still has to be advertised — list it without
-      // its schema rather than dropping it entirely.
+      // A tool too large to fit still has to be advertised — list it in the
+      // bounded whitelist projection rather than dropping it entirely. (A
+      // narrow "drop the schema" copy kept outputSchema/_meta/vendor subtrees
+      // and could still exceed the cap on its own — prod, 2026-10-16.)
       if (kept.length === 0) {
-        kept.push(withoutToolSchema(tool));
+        kept.push(this.serverToolSchemaMode === "off" ? tool : serverToolShape(tool));
       }
       trimmed = true;
       break;
     }
 
     // Note the flag, not a length comparison: a single oversized tool is
-    // replaced by its schema-less copy, which has the same length.
-    if (!trimmed) return doc;
+    // replaced by its projected copy, which has the same length.
+    if (!trimmed) {
+      return this.serverToolSchemaMode === "off"
+        ? { ...doc, capabilities: { ...capabilities, tools: projected } }
+        : doc;
+    }
 
     this.logger.warn(
-      `[indexer] Document "${doc.mcp_name}" has ${tools.length} tool(s) whose schemas exceed ` +
+      `[indexer] Document "${doc.mcp_name}" has ${tools.length} tool(s) that would exceed ` +
         `MeiliSearch's ${MEILI_MAX_DOCUMENT_FIELDS}-field document limit — storing ${kept.length} ` +
         `in the server document (the tool index keeps all ${tools.length}).`,
     );
@@ -630,10 +726,3 @@ function canonicalize(value: unknown): unknown {
   return value;
 }
 
-async function mapWithConcurrency<T>(items: T[], action: (item: T) => Promise<void>, maximum: number): Promise<void> {
-  let next = 0;
-  const worker = async () => {
-    while (next < items.length) await action(items[next++]);
-  };
-  await Promise.all(Array.from({ length: Math.min(maximum, items.length) }, worker));
-}

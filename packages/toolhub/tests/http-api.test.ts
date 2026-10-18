@@ -12,7 +12,8 @@ import { MemorySearchAdapter } from "../src/adapters/memory.js";
 import { SearchService } from "../src/search-service.js";
 import { createApp } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
-import type { EmbeddingProvider, SearchDocument } from "../src/adapters/types.js";
+import type { SearchDocument } from "../src/adapters/types.js";
+import type { EmbeddingProvider } from "../src/embedder.js";
 import type { SearchDocument as SearchDocumentType } from "../src/adapters/types.js";
 
 /** Deterministic fake embedder — same shape search.test.ts uses. */
@@ -96,6 +97,17 @@ function post(pathname: string, body: unknown, headers: Record<string, string> =
 // ---------------------------------------------------------------------------
 // Public read routes
 // ---------------------------------------------------------------------------
+
+describe("GET /health/live", () => {
+  test("200 liveness probe without touching the backend", async () => {
+    const res = await get("/health/live");
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { status: string; service: string; backend?: string };
+    assert.equal(body.status, "ok");
+    assert.equal(body.service, "toolhub");
+    assert.equal(body.backend, undefined, "the liveness probe must not report or query the backend");
+  });
+});
 
 describe("GET /health", () => {
   test("200 with ok status, memory backend, and document count", async () => {
@@ -275,5 +287,35 @@ describe("admin index + dump + delete", () => {
     const body = (await res.json()) as { servers?: unknown[] } | { documents?: unknown[] };
     const docs = (body as { servers?: unknown[] }).servers ?? (body as { documents?: unknown[] }).documents;
     assert.ok(Array.isArray(docs));
+  });
+});
+
+describe("POST /admin/embedding-fingerprint", () => {
+  test("no token → 401", async () => {
+    const res = await post("/admin/embedding-fingerprint", {});
+    assert.equal(res.status, 401);
+  });
+
+  test("records the current embedding fingerprint (clears needsReindex)", async () => {
+    const res = await post(
+      "/admin/embedding-fingerprint",
+      {},
+      { Authorization: "Bearer e2e-admin-token" },
+    );
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { success: boolean };
+    assert.equal(body.success, true);
+
+    // The point of the endpoint: a batched rebuild can declare completion, so
+    // the active fingerprint must match the current one afterwards.
+    const health = await get("/health");
+    const healthBody = (await health.json()) as {
+      embedding: { currentFingerprint: string; activeFingerprint: string | null; needsReindex: boolean };
+    };
+    assert.equal(
+      healthBody.embedding.activeFingerprint,
+      healthBody.embedding.currentFingerprint,
+    );
+    assert.equal(healthBody.embedding.needsReindex, false);
   });
 });

@@ -14,7 +14,13 @@ import { createHash } from "node:crypto";
 
 /** Tool index builder limits (defaults; overridable per server). */
 export interface ToolBuildOptions {
-  /** Max tools embedded per server (deterministic subset). */
+  /**
+   * Max tools EMBEDDED per server (deterministic subset). Every tool becomes
+   * a tool document — the tool index is the complete tool list — but only
+   * this many per server receive semantic vectors. The rest are stored
+   * lexically searchable (has_vector: false), which bounds embedding cost on
+   * aggregator servers listing thousands of tools.
+   */
   maxToolsEmbedded: number;
   /** Max tool description chars embedded. */
   maxToolDescChars: number;
@@ -32,16 +38,18 @@ export const DEFAULT_TOOL_BUILD_OPTIONS: ToolBuildOptions = {
 };
 
 /**
- * Builds tool documents for one server document. Deterministic: tools with
- * empty names are dropped, tools with descriptions sort first (stable), the
- * remaining are capped at maxToolsEmbedded preserving that order.
+ * Builds tool documents for one server document — one per named tool, no
+ * cap: the tool index keeps the complete tool list (only the SERVER document
+ * trims its stored tool copy to MeiliSearch's field budget). Deterministic
+ * order: tools with empty names are dropped, tools with descriptions sort
+ * first (stable). Embedding is bounded separately via pickEmbeddedDocs().
  */
 export function buildToolDocumentsForServer(
   server: SearchDocument,
   options: ToolBuildOptions = DEFAULT_TOOL_BUILD_OPTIONS,
 ): ToolDocument[] {
   const rawTools = extractRawTools(server);
-  const picked = pickTools(rawTools, options.maxToolsEmbedded);
+  const picked = orderTools(rawTools);
 
   const updatedAt = server.updated_at ?? new Date().toISOString();
   return picked.map((tool) => {
@@ -101,12 +109,30 @@ function extractRawTools(server: SearchDocument): RawTool[] {
     }));
 }
 
-function pickTools(tools: RawTool[], max: number): RawTool[] {
+function orderTools(tools: RawTool[]): RawTool[] {
   const named = tools.filter((t) => t.name.trim().length > 0);
   // Stable sort: tools with descriptions first (crawl order preserved within groups)
   const withDesc = named.filter((t) => (t.description ?? "").trim().length > 0);
   const withoutDesc = named.filter((t) => (t.description ?? "").trim().length === 0);
-  return [...withDesc, ...withoutDesc].slice(0, max);
+  return [...withDesc, ...withoutDesc];
+}
+
+/**
+ * The deterministic subset of tool documents that receives semantic vectors:
+ * the first maxPerServer docs of each server, in build order. Everything
+ * outside the subset is still stored and lexically searchable — it just has
+ * no vector.
+ */
+export function pickEmbeddedDocs(docs: ToolDocument[], maxPerServer: number): ToolDocument[] {
+  const perServer = new Map<string, number>();
+  const picked: ToolDocument[] = [];
+  for (const doc of docs) {
+    const seen = perServer.get(doc.server_mcp_name) ?? 0;
+    if (seen >= maxPerServer) continue;
+    perServer.set(doc.server_mcp_name, seen + 1);
+    picked.push(doc);
+  }
+  return picked;
 }
 
 function buildToolSemanticText(

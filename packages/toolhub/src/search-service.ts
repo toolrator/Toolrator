@@ -470,7 +470,10 @@ export class SearchService {
                 name,
                 description: tool.description,
                 inputSchema: tool.inputSchema,
-                compactSchema: generateCompactSchema(tool.inputSchema),
+                compactSchema:
+                  typeof tool.compact_schema === "string" && tool.compact_schema
+                    ? tool.compact_schema
+                    : generateCompactSchema(tool.inputSchema),
                 annotations: tool.annotations,
                 server_mcp_name: hit.mcp_name,
                 server_display_name: hit.display_name,

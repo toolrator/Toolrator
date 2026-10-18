@@ -89,8 +89,9 @@ describe("OpenAICompatibleEmbedder", () => {
 
     assertVectorClose(vector, [0.4472135954999579, 0.8944271909999159]);
     assert.strictEqual(capturedUrl, "https://api.openai.com/v1/embeddings");
-    assert.strictEqual(capturedInit!.headers["Authorization"], "Bearer sk-test");
-    assert.strictEqual(capturedInit!.headers["Content-Type"], "application/json");
+    const headers = capturedInit!.headers as Record<string, string>;
+    assert.strictEqual(headers["Authorization"], "Bearer sk-test");
+    assert.strictEqual(headers["Content-Type"], "application/json");
     assert.deepStrictEqual(JSON.parse(String(capturedInit!.body)), {
       model: "text-embedding-3-small",
       input: ["hello world"],

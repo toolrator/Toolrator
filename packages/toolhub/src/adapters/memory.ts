@@ -142,6 +142,15 @@ export class MemorySearchAdapter implements SearchAdapter {
     }
   }
 
+  async removeToolsByServers(mcpNames: string[]): Promise<void> {
+    const keys = new Set(mcpNames.map((name) => name.toLowerCase()));
+    for (const [id, doc] of this.toolDocuments) {
+      if (keys.has(doc.server_mcp_name.toLowerCase())) {
+        this.toolDocuments.delete(id);
+      }
+    }
+  }
+
   async deleteTools(ids: string[]): Promise<void> {
     for (const id of ids) this.toolDocuments.delete(id);
   }

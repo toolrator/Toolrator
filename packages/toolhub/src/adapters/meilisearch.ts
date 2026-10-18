@@ -96,6 +96,32 @@ const TOOL_SORTABLE_ATTRIBUTES = ["updated_at"];
 const META_INDEX_NAME = "toolhub_meta";
 const META_DOC_ID = "embedding";
 
+/**
+ * Meilisearch `userProvided` embedder opt-out.
+ *
+ * Both document indexes configure an embedder ("default") with
+ * `source: "userProvided"`: the engine expects the caller to supply vectors
+ * and refuses to embed missing ones. A document without a usable
+ * `_vectors.default` therefore makes Meilisearch reject the ENTIRE batch with
+ * `vector_embedding_error` — not just the offending document. Explicitly
+ * setting `_vectors.default: null` marks the document as intentionally
+ * un-embedded: it is stored and stays fully searchable via its lexical fields.
+ *
+ * Prod incident 2026-10-18: tool docs beyond the maxToolsEmbedded budget
+ * carry no vector, so every `indexTools` batch containing one failed — after
+ * `removeToolsByServers` had already deleted the servers' tools, silently
+ * wiping them from the index on each incremental sync.
+ */
+function withVectorOptOut<T extends Record<string, any>>(docs: T[]): T[] {
+  return docs.map((doc) => {
+    const vectors = doc._vectors as Record<string, unknown> | undefined;
+    const current = vectors?.default;
+    if (Array.isArray(current) && current.length > 0) return doc;
+    const next: Record<string, any> = { ...doc, _vectors: { ...(vectors ?? {}), default: null } };
+    return next as T;
+  });
+}
+
 function serverSettings(dimensions: number): Record<string, unknown> {
   return {
     filterableAttributes: FILTERABLE_ATTRIBUTES,
@@ -363,9 +389,36 @@ export class MeiliSearchAdapter implements SearchAdapter {
     const CHUNK_SIZE = 500;
     for (let i = 0; i < normalized.length; i += CHUNK_SIZE) {
       const chunk = normalized.slice(i, i + CHUNK_SIZE);
-      const task = await index.addDocuments(chunk);
-      // Wait for the indexing task to complete
-      await this.waitForSuccess(task.taskUid, "index servers");
+      await this.upsertChunkWithRetry(index, chunk, "index servers");
+    }
+  }
+
+  /**
+   * Submit one upsert chunk and wait for its task, retrying transient
+   * failures (prod: 408 Request Timeout storms when dumps and indexing
+   * overlap). Upserts are idempotent, so re-submitting a chunk whose wait
+   * failed can neither duplicate nor lose documents.
+   */
+  private async upsertChunkWithRetry<T extends Record<string, any>>(
+    index: Index<T>,
+    chunk: T[],
+    action: string,
+    attempts = 3,
+  ): Promise<void> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const task = await index.addDocuments(withVectorOptOut(chunk));
+        await this.waitForSuccess(task.taskUid, action);
+        return;
+      } catch (err) {
+        if (attempt >= attempts || !isTransientMeiliError(err)) throw err;
+        const message = err instanceof Error ? err.message : String(err);
+        const delayMs = 1_000 * attempt;
+        console.warn(
+          `[meili] ${action} attempt ${attempt}/${attempts} failed transiently (${message}) — retrying in ${delayMs}ms`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
     }
   }
 
@@ -430,7 +483,7 @@ export class MeiliSearchAdapter implements SearchAdapter {
       await this.waitForSuccess((await stagedServer.updateSettings(serverSettings(this.dimensions))).taskUid, "stage server settings");
       for (let i = 0; i < servers.length; i += 500) {
         const documents = servers.slice(i, i + 500).map((doc) => ({ ...doc, id: encodeDocumentId(doc.mcp_name) }));
-        await this.waitForSuccess((await stagedServer.addDocuments(documents)).taskUid, "stage servers");
+        await this.waitForSuccess((await stagedServer.addDocuments(withVectorOptOut(documents))).taskUid, "stage servers");
       }
 
       const swaps = [{ indexes: [this.indexName, stagedServerName] }];
@@ -438,7 +491,7 @@ export class MeiliSearchAdapter implements SearchAdapter {
         const stagedTools = this.adminClient.index<ToolDocument>(stagedToolName);
         await this.waitForSuccess((await stagedTools.updateSettings(toolSettings(this.dimensions))).taskUid, "stage tool settings");
         for (let i = 0; i < tools.length; i += 500) {
-          await this.waitForSuccess((await stagedTools.addDocuments(tools.slice(i, i + 500))).taskUid, "stage tools");
+          await this.waitForSuccess((await stagedTools.addDocuments(withVectorOptOut(tools.slice(i, i + 500)))).taskUid, "stage tools");
         }
         swaps.push({ indexes: [this.toolIndexName, stagedToolName] });
       }
@@ -467,8 +520,7 @@ export class MeiliSearchAdapter implements SearchAdapter {
     const CHUNK_SIZE = 500;
     for (let i = 0; i < documents.length; i += CHUNK_SIZE) {
       const chunk = documents.slice(i, i + CHUNK_SIZE);
-      const task = await index.addDocuments(chunk);
-      await this.waitForSuccess(task.taskUid, "index tools");
+      await this.upsertChunkWithRetry(index, chunk, "index tools");
     }
   }
 
@@ -485,6 +537,25 @@ export class MeiliSearchAdapter implements SearchAdapter {
       const docs = await this.searchTools("", { serverMcpName: mcpName, limit: 10_000 });
       if (docs.hits.length > 0) {
         await this.deleteTools(docs.hits.map((h) => h.id));
+      }
+      return;
+    }
+    await this.waitForSuccess(task.taskUid, "remove server tools");
+  }
+
+  /** Batched variant: one delete-by-filter task for every listed server. */
+  async removeToolsByServers(mcpNames: string[]): Promise<void> {
+    if (mcpNames.length === 0) return;
+    const index = this.adminClient.index(this.toolIndexName);
+    const values = mcpNames.map((name) => `"${sanitizeFilterValue(name.toLowerCase())}"`);
+    const filter = `server_mcp_name IN [${values.join(", ")}]`;
+    let task: { taskUid: number };
+    try {
+      task = await index.deleteDocuments({ filter });
+    } catch (err) {
+      console.warn("[meili] batched delete-by-filter failed, falling back to per-server removal:", err);
+      for (const name of mcpNames) {
+        await this.removeToolsByServer(name);
       }
       return;
     }
@@ -695,9 +766,25 @@ export class MeiliSearchAdapter implements SearchAdapter {
   }
 
   private async waitForSuccess(taskUid: number, action: string): Promise<void> {
-    const task = await this.adminClient.waitForTask(taskUid, { timeOutMs: 30_000, intervalMs: 100 });
-    if (task.status !== "succeeded") {
-      throw new Error(`[meili] Could not ${action}: ${task.error?.message ?? task.status}`);
+    // Task polling can hit transient backend errors (prod: 408 Request Timeout
+    // during concurrent read/write storms — one such poll failed a 9-minute
+    // batch mid-flight on 2026-10-16). The task itself keeps running, so the
+    // only correct response to a transient poll failure is to keep waiting.
+    const attempts = 4;
+    for (let attempt = 1; ; attempt++) {
+      let task;
+      try {
+        task = await this.adminClient.waitForTask(taskUid, { timeOutMs: 120_000, intervalMs: 100 });
+      } catch (err) {
+        if (attempt >= attempts || !isTransientMeiliError(err)) throw err;
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[meili] waitForTask(${action}) attempt ${attempt}/${attempts} failed transiently (${message}) — continuing to wait`);
+        continue;
+      }
+      if (task.status !== "succeeded") {
+        throw new Error(`[meili] Could not ${action}: ${task.error?.message ?? task.status}`);
+      }
+      return;
     }
   }
 
@@ -737,7 +824,7 @@ export class MeiliSearchAdapter implements SearchAdapter {
   private async getDocumentsWithRetry<T extends Record<string, any>>(
     index: Index<T>,
     params: Record<string, unknown>,
-    attempts = 3,
+    attempts = 5,
   ): Promise<{ results: T[] }> {
     let lastError: unknown;
     for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -747,8 +834,14 @@ export class MeiliSearchAdapter implements SearchAdapter {
         lastError = err;
         if (attempt === attempts || !isTransientMeiliError(err)) throw err;
         const message = err instanceof Error ? err.message : String(err);
-        console.warn(`[meili] getDocuments attempt ${attempt}/${attempts} failed transiently (${message}) — retrying`);
-        await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
+        // Exponential backoff: transient 408s cluster into multi-second
+        // storms when dumps and indexing overlap — retrying instantly just
+        // re-enters the same storm.
+        const delayMs = Math.min(500 * 2 ** (attempt - 1), 8_000);
+        console.warn(
+          `[meili] getDocuments attempt ${attempt}/${attempts} failed transiently (${message}) — retrying in ${delayMs}ms`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
     }
     throw lastError;

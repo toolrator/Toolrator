@@ -23,5 +23,5 @@ ENV NODE_ENV=production \
 EXPOSE 7600
 USER node
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD curl -f http://localhost:7600/health || exit 1
+  CMD curl -f http://localhost:7600/health/live || exit 1
 CMD ["node", "dist/server.js"]
