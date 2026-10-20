@@ -245,10 +245,16 @@ export function createApp(
    * GET /admin/index
    * Minimal metadata of all indexed documents (servers + tools). Lets an
    * external orchestrator cheaply diff its own database against the index.
+   *
+   * `?tools=0` (or `includeTools=false`) omits the tool-doc listing for
+   * callers that only diff server stamps — the tool index holds 200k+ docs at
+   * registry scale and listing them on every sync round starves the loop.
    */
   admin.get("/index", async (c) => {
     try {
-      const list = await service.getIndexList();
+      const toolsParam = (c.req.query("tools") ?? c.req.query("includeTools") ?? "").toLowerCase();
+      const includeTools = toolsParam !== "0" && toolsParam !== "false";
+      const list = await service.getIndexList({ includeTools });
       return c.json({
         servers: list.servers,
         tools: list.tools,

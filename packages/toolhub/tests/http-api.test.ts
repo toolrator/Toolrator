@@ -264,6 +264,44 @@ describe("admin index + dump + delete", () => {
     assert.equal(listBody.servers.length, 3);
   });
 
+  // The app's 10-minute incremental sync only diffs SERVER stamps. Listing
+  // 200k+ tool docs on every round was the last known event-loop starvation
+  // source behind the tr-search wedge (prod, 2026-10-19), so `?tools=0` must
+  // actually skip the tool listing while the default stays unchanged.
+  test("GET /admin/index?tools=0 skips the tool listing", async () => {
+    const upsert = await post(
+      "/admin/index",
+      {
+        documents: [
+          makeDoc({
+            mcp_name: "tools-server",
+            display_name: "Tools Server",
+            capabilities: { tools: [{ name: "alpha" }, { name: "beta" }] },
+          }),
+        ],
+      },
+      { Authorization: "Bearer e2e-admin-token" },
+    );
+    assert.equal(upsert.status, 200);
+
+    const full = await get("/admin/index", { Authorization: "Bearer e2e-admin-token" });
+    const fullBody = (await full.json()) as { servers: unknown[]; tools: Array<{ id: string }> };
+    assert.ok(fullBody.tools.length >= 2, "default listing must include the server's tool docs");
+    const fullServers = fullBody.servers.length;
+
+    const light = await get("/admin/index?tools=0", { Authorization: "Bearer e2e-admin-token" });
+    assert.equal(light.status, 200);
+    const lightBody = (await light.json()) as { servers: unknown[]; tools: unknown[] };
+    assert.equal(lightBody.servers.length, fullServers, "server stamps must be unaffected by the flag");
+    assert.deepEqual(lightBody.tools, []);
+
+    const cleanup = await app.request("/admin/index/tools-server", {
+      method: "DELETE",
+      headers: { Authorization: "Bearer e2e-admin-token" },
+    });
+    assert.equal(cleanup.status, 200);
+  });
+
   test("POST /admin/index with no documents → 400", async () => {
     const res = await post("/admin/index", { documents: [] }, { Authorization: "Bearer e2e-admin-token" });
     assert.equal(res.status, 400);

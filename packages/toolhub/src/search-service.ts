@@ -514,11 +514,18 @@ export class SearchService {
 
   /**
    * Minimal metadata of all indexed documents (incremental sync diffing).
+   *
+   * `includeTools: false` skips the tool-document listing. Callers that only
+   * diff SERVER stamps (the app's 10-minute incremental sync) must pass it:
+   * at registry scale the tool index holds 200k+ docs, so listing them every
+   * round triples the payload and starves the event loop (measured: wedge +
+   * watchdog restarts, prod 2026-10-19).
    */
-  async getIndexList(): Promise<{ servers: Array<{ id: string; updated_at?: string; content_hash?: string; has_vector?: boolean }>; tools: Array<{ id: string; updated_at?: string; content_hash?: string; has_vector?: boolean }> }> {
+  async getIndexList(options: { includeTools?: boolean } = {}): Promise<{ servers: Array<{ id: string; updated_at?: string; content_hash?: string; has_vector?: boolean }>; tools: Array<{ id: string; updated_at?: string; content_hash?: string; has_vector?: boolean }> }> {
+    const includeTools = options.includeTools !== false;
     const [servers, tools] = await Promise.all([
       this.adapter.getIndexList(),
-      this.adapter.toolIndexEnabled ? this.adapter.getToolIndexList() : Promise.resolve([]),
+      includeTools && this.adapter.toolIndexEnabled ? this.adapter.getToolIndexList() : Promise.resolve([]),
     ]);
     return { servers, tools };
   }
