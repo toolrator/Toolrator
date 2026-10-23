@@ -230,14 +230,13 @@ async function main(): Promise<void> {
   // 4. Create MCP server
   const server = createConnectorServer();
 
-  // Anonymous usage telemetry: name/action/ok only (see telemetry.ts for the
+  // Optional aggregate usage: fixed name/action/ok only (see telemetry.ts for the
   // privacy + abuse rules). Best-effort batches to the upstream usage
-  // endpoint; kill switch: TOOLRATOR_TELEMETRY=off.
+  // endpoint; explicit opt-in: TOOLRATOR_TELEMETRY=on.
   const telemetry = new TelemetryClient({
     endpoint: new URL("/api/usage/events", resolvedDefaultBaseUrl).toString(),
     enabled: telemetryEnabledFromEnv(process.env.TOOLRATOR_TELEMETRY),
     version: TOOLCONNECTOR_VERSION,
-    token: initialState.apiKey ?? null,
     logger,
   });
 

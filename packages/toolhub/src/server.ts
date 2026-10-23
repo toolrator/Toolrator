@@ -8,11 +8,13 @@
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
+import { bodyLimit } from "hono/body-limit";
+import { HTTPException } from "hono/http-exception";
 import { serve } from "@hono/node-server";
 import { timingSafeEqual, createHash } from "node:crypto";
 
 import { loadConfig, type SearchEngineConfig } from "./config.js";
-import { SearchService } from "./search-service.js";
+import { SearchService, SearchBusyError } from "./search-service.js";
 import { MemorySearchAdapter } from "./adapters/memory.js";
 import { MeiliSearchAdapter } from "./adapters/meilisearch.js";
 import { embeddingDimensions } from "./embedder.js";
@@ -79,6 +81,17 @@ export function createApp(
   config: SearchEngineConfig,
 ): Hono {
   const app = new Hono();
+  app.use("/search", bodyLimit({ maxSize: 64 * 1024 }));
+  app.onError((error, c) => {
+    if (error instanceof HTTPException) return error.getResponse();
+    if (error instanceof RangeError) return c.json({ error: "invalid_search", message: error.message }, 400);
+    if (error instanceof SearchBusyError) {
+      c.header("Retry-After", "2");
+      return c.json({ error: "search_busy" }, 503);
+    }
+    console.error("[search] Request failed", error);
+    return c.json({ error: "search_failed" }, 500);
+  });
 
   // CORS: public routes only. The admin endpoints are bearer-token protected;
   // reflecting credentials cross-origin widens the blast radius of a leaked
@@ -213,6 +226,18 @@ export function createApp(
 
   const admin = new Hono();
   admin.use("*", adminAuth(config));
+  let mutationActive = false;
+  admin.use("*", async (c, next) => {
+    if (c.req.method === "GET") return next();
+    // A timed-out caller does not stop ONNX/Meili work. Reject another writer
+    // until the actual operation settles instead of building an unbounded queue.
+    if (mutationActive) {
+      c.header("Retry-After", "5");
+      return c.json({ error: "index_busy" }, 503);
+    }
+    mutationActive = true;
+    try { await next(); } finally { mutationActive = false; }
+  });
 
   /**
    * POST /admin/index
@@ -417,11 +442,6 @@ export function createApp(
   // ── Error handling ───────────────────────────────────────────────
 
   app.notFound((c) => c.json({ error: "not found" }, 404));
-
-  app.onError((error, c) => {
-    console.error("[search] Unhandled error:", error);
-    return c.json({ error: "internal server error" }, 500);
-  });
 
   return app;
 }

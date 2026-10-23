@@ -10,7 +10,7 @@
 
 ## 🟢 Project Status
 
-**v0.4.2** — Proper protocol-version negotiation on the legacy `initialize` opening (a client requesting `2026-07-28` is no longer answered with `2025-11-25`, which modern IDEs refuse), plus anonymous usage telemetry (see [Usage telemetry](#-usage-telemetry-anonymous-opt-out)). Carries v0.4.1: three tools, OAuth-only interactive login, unified credential status, corrected device-grant polling, and a 4-second boot bound on remote registry resolution. Adopts [MCP 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28) (official stable revision: stateless, per-request capabilities, MRTR, Tasks extension). See [`MCP-FEATURES.md`](./MCP-FEATURES.md) for the full compliance matrix.
+The connector exposes three tools for discovery, remote execution, and authentication. It uses modern MCP 2026-07-28, retains tested compatibility with older stdio clients, and keeps remote boot resolution bounded. See [`MCP-FEATURES.md`](./MCP-FEATURES.md) for protocol coverage and the usage section below for optional aggregate counts.
 
 **Requirements**: Node.js >= 20.
 
@@ -21,7 +21,7 @@
 This package is published publicly on the NPM registry. You can run it instantly using `npx`:
 
 ```bash
-npx -y @toolrator/toolconnector
+npx -y @toolrator/toolconnector@latest
 ```
 
 Alternatively, you can install it globally:
@@ -42,20 +42,13 @@ Version 0.4.2 exposes exactly **3 tools**, so the agent's context window carries
 
 ---
 
-## 📈 Usage telemetry (anonymous, opt-out)
+## 📈 Usage telemetry (optional, off by default)
 
-Toolconnector reports **anonymous aggregate usage** so the ecosystem can show which MCP servers are actually used. One event looks like this — it is the entire payload:
+Set `TOOLRATOR_TELEMETRY=on` in the MCP client's environment to opt in to aggregate success/failure counts. Unset, empty, or unknown values disable collection; `off` explicitly disables it.
 
-```json
-{ "name": "https://example.com/mcp", "action": "call", "ok": true, "v": "0.4.2" }
-```
+Events contain only the fixed identifier `name: "toolconnector"`, `action: "call" | "search"`, `ok`, and the connector version. Endpoint URLs, private hosts, engine identifiers, queries, arguments and results are excluded. No bearer credentials or cookies accompany these requests. The receiving network service still sees the connection's IP address; this is not a network-anonymity guarantee.
 
-`name` is the external server URL you called (or the search-engine id), `action` is `call` or `search`, `ok` is whether it succeeded, `v` is the connector version.
-
-**Never sent:** query text, tool names, tool arguments, tool results, user identity, your machine's hostname, cookies, or anything free-form.
-
-- Batches (capped at 50 events) are posted at most once a minute to the configured upstream (`/api/usage/events`), riding the authenticated channel when logged in. Telemetry is fire-and-forget: it never blocks or fails a tool call, failed batches are dropped rather than retried, and the in-memory queue is bounded (500 events, oldest dropped).
-- **Kill switch:** set `TOOLRATOR_TELEMETRY=off` in the MCP client's environment to disable telemetry entirely.
+Delivery is best effort with a bounded in-memory queue. Failed batches are discarded and never block a tool call. This measures aggregate product use, not which individual MCP servers a person uses.
 
 ---
 
@@ -218,7 +211,7 @@ Add the following configuration to your `claude_desktop_config.json`:
       "command": "npx",
       "args": [
         "-y",
-        "@toolrator/toolconnector"
+        "@toolrator/toolconnector@latest"
       ]
     }
   }
@@ -379,4 +372,3 @@ See [`CONTRIBUTING.md`](https://github.com/toolrator/Toolrator/blob/main/CONTRIB
 ## 📄 License
 
 Apache License 2.0 © Toolrator
-

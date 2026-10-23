@@ -44,6 +44,9 @@ export class SearchService {
 
   private readonly resultCache = new LRUCache<string, SearchResult>({
     max: 1000,
+    maxSize: 64 * 1024 * 1024,
+    maxEntrySize: 4 * 1024 * 1024,
+    sizeCalculation: (value) => JSON.stringify(value).length * 2,
     ttl: 60 * 1000, // 60 seconds
   });
 
@@ -195,12 +198,13 @@ export class SearchService {
       this.config.maxResultsLimit,
     );
     const offset = normalizeOffset(options?.offset);
+    if (offset + limit > 1000) throw new RangeError("Search pagination is limited to the first 1000 results; narrow the query or use an index dump.");
 
     const sanitizedOptions: SearchOptions = {
       limit,
       offset,
-      tags: options?.tags?.map((t) => t.trim().toLowerCase()).filter(Boolean),
-      provider: options?.provider?.trim() || undefined,
+      tags: options?.tags?.slice(0, 20).map((t) => t.trim().toLowerCase().slice(0, 64)).filter(Boolean),
+      provider: options?.provider?.trim().slice(0, 128) || undefined,
       lexicalOnly: options?.lexicalOnly,
       maxTools: normalizeToolLimit(options?.maxTools, this.config.maxToolHitsReturned),
     };
@@ -217,6 +221,7 @@ export class SearchService {
 
     const inFlight = this.pendingResults.get(cacheKey);
     if (inFlight) return inFlight;
+    if (this.pendingResults.size >= 32) throw new SearchBusyError();
     const pending = this.searchUncached(query, sanitizedOptions, limit, offset, cacheKey, this.cacheGeneration);
     this.pendingResults.set(cacheKey, pending);
     try {
@@ -278,6 +283,13 @@ export class SearchService {
       offset: useToolIndex ? 0 : offset,
       limit: useToolIndex ? candidateCount : limit,
     });
+    // Registry namespaces and copied capability dumps can crowd a known
+    // service out of the top-K entirely. A small name-only lexical pass finds
+    // identity matches without changing capability search recall.
+    const identityPromise = useToolIndex && query.length <= 64 && query.split(" ").length <= 3
+      ? this.adapter.search(query, { ...sanitizedOptions, identityOnly: true, vector: undefined, offset: 0, limit: 20 })
+          .catch(() => null)
+      : Promise.resolve(null);
 
     // 2. Tool index search — skipped for /suggest (lexicalOnly) and browse-all
     let toolResult: ToolSearchResult | null = null;
@@ -295,7 +307,12 @@ export class SearchService {
         return null;
       })
       : Promise.resolve(null);
-    const [serverResult, searchedTools] = await Promise.all([serverPromise, toolPromise]);
+    const [serverResult, searchedTools, identityResult] = await Promise.all([serverPromise, toolPromise, identityPromise]);
+    if (identityResult) {
+      const identity = identityResult.hits.filter((hit) => matchesIdentity(hit.display_name, query));
+      const names = new Set(identity.map((hit) => hit.mcp_name));
+      serverResult.hits = [...identity, ...serverResult.hits.filter((hit) => !names.has(hit.mcp_name))];
+    }
     toolResult = searchedTools;
 
     // 3. Intent classification (server-first heuristic, D7)
@@ -307,7 +324,7 @@ export class SearchService {
     });
 
     // 4. RRF merge of server hits with per-server tool rollup
-    const merged = useToolIndex ? rrfMerge(serverResult.hits, toolResult?.hits ?? [], this.config) : serverResult.hits;
+    const merged = useToolIndex ? rrfMerge(serverResult.hits, toolResult?.hits ?? [], this.config, query) : serverResult.hits;
     const page = useToolIndex ? merged.slice(offset, offset + limit) : merged;
 
     // 5. Tool hit rollup (capped per server; more when intent is tool-first)
@@ -540,6 +557,10 @@ export class SearchService {
   }
 }
 
+export class SearchBusyError extends Error {
+  constructor() { super("Search is busy. Try again shortly."); }
+}
+
 // ---------------------------------------------------------------------------
 // RRF merge & tool rollup
 // ---------------------------------------------------------------------------
@@ -556,6 +577,7 @@ function rrfMerge(
   serverHits: SearchHit[],
   toolHits: ToolDocumentHit[],
   config: SearchEngineConfig,
+  query: string,
 ): SearchHit[] {
   const scores = new Map<string, { hit: SearchHit; score: number }>();
 
@@ -613,7 +635,7 @@ function rrfMerge(
   }
 
   return [...scores.values()]
-    .map((entry) => ({ ...entry, score: entry.score * trustFactor(entry.hit, config) }))
+    .map((entry) => ({ ...entry, score: entry.score * trustFactor(entry.hit, config) * (matchesIdentity(entry.hit.display_name, query) ? 2 : 1) }))
     .sort((a, b) => b.score - a.score)
     .map((entry) => entry.hit);
 }
@@ -637,6 +659,12 @@ function trustFactor(
 }
 
 const TOOL_ROLLUP_TOP_N = 5;
+
+function matchesIdentity(displayName: string | undefined, query: string): boolean {
+  const name = displayName?.trim().toLowerCase();
+  const q = query.trim().toLowerCase();
+  return !!q && !!name && (name === q || name.startsWith(`${q} `));
+}
 const TOOL_ROLLUP_DECAY = [1, 0.75, 0.55, 0.4, 0.3];
 
 /**
@@ -650,13 +678,17 @@ function buildToolHits(
   globalMax: number,
 ): ToolHit[] {
   const perServer = new Map<string, number>();
+  const seen = new Set<string>();
   const out: ToolHit[] = [];
   const cap = Math.min(maxTools ?? globalMax, globalMax);
   if (cap <= 0) return out;
 
   for (const doc of docs) {
+    const signature = JSON.stringify([doc.tool_name, doc.tool_description, doc.compact_schema]);
+    if (seen.has(signature)) continue;
     const count = perServer.get(doc.server_mcp_name) ?? 0;
     if (count >= maxPerServer) continue;
+    seen.add(signature);
     perServer.set(doc.server_mcp_name, count + 1);
     out.push({
       name: doc.tool_name,

@@ -164,6 +164,8 @@ export interface RawTool {
  * Options for a search query.
  */
 export interface SearchOptions {
+  /** Internal candidate pass restricted to display names; never capability dumps. */
+  identityOnly?: boolean;
   /** Maximum number of results to return. */
   limit?: number;
 

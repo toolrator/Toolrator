@@ -1,14 +1,14 @@
 // ---------------------------------------------------------------------------
-// toolconnector — anonymous usage telemetry
+// toolconnector — opt-in aggregate usage telemetry
 // ---------------------------------------------------------------------------
 //
-// Answers "which MCP servers are actually used" with the minimum data that
-// can answer it, and nothing else:
+// Counts connector call/search success without identifying external services:
 //
 //   { name, action: "call" | "search", ok }   (+ connector version on the wire)
 //
-// `name` is the external server URL the agent called (or the search engine
-// id). Privacy rules this module must keep:
+// `name` is the fixed product identifier "toolconnector". Endpoints and
+// engine IDs are deliberately excluded: even their paths can contain secrets.
+// Privacy rules this module must keep:
 //   - NEVER send query text, tool arguments, tool results, user identity,
 //     hostnames, or anything free-form.
 //   - No cookies, no identifiers, no local state beyond the in-memory queue.
@@ -19,7 +19,7 @@
 // tool call. Kill switch: TOOLRATOR_TELEMETRY=off|false|0|no.
 
 export interface TelemetryEvent {
-  /** External MCP server URL (call) or search engine id (search). */
+  /** Fixed product identifier; never an endpoint or engine ID. */
   name: string;
   action: "call" | "search";
   ok: boolean;
@@ -31,8 +31,6 @@ export interface TelemetryOptions {
   enabled: boolean;
   /** Connector version, sent as `v` for skew analysis. */
   version: string;
-  /** Optional bearer token (the authenticated channel is the anti-abuse lever). */
-  token?: string | null;
   logger?: { warn?: (message: string, ...args: unknown[]) => void };
   fetchImpl?: typeof fetch;
   /** Events kept in memory before the oldest are dropped (default 500). */
@@ -43,10 +41,9 @@ export interface TelemetryOptions {
   flushIntervalMs?: number;
 }
 
-/** Kill-switch parsing shared with config. */
+/** Explicit opt-in; unknown values fail closed. */
 export function telemetryEnabledFromEnv(raw: string | undefined): boolean {
-  if (raw === undefined || raw.trim() === "") return true;
-  return !["off", "false", "0", "no"].includes(raw.trim().toLowerCase());
+  return ["on", "true", "1", "yes"].includes(raw?.trim().toLowerCase() ?? "");
 }
 
 export class TelemetryClient {
@@ -75,7 +72,7 @@ export class TelemetryClient {
 
   record(event: TelemetryEvent): void {
     if (!this.options.enabled) return;
-    if (!event.name || (event.action !== "call" && event.action !== "search")) return;
+    if (event.name !== "toolconnector" || (event.action !== "call" && event.action !== "search")) return;
     if (this.queue.length >= this.maxQueue) this.queue.shift();
     this.queue.push(event);
     if (this.queue.length >= this.maxBatch) {
@@ -88,8 +85,8 @@ export class TelemetryClient {
 
   /**
    * Extract a telemetry event from a tool call. Only the two popularity
-   * signals are tracked: `mcp_server` calls (which server was used) and
-   * `search_mcp_ecosystem` searches (which engine). Everything else —
+   * signals are tracked: `mcp_server` calls and `search_mcp_ecosystem`
+   * searches. Target URLs and engine IDs are excluded. Everything else —
    * auth flows, arguments, results — is ignored by design.
    */
   recordFromToolCall(toolName: string, args: unknown, result: unknown): void {
@@ -97,9 +94,9 @@ export class TelemetryClient {
     const a = (args ?? {}) as Record<string, unknown>;
     const ok = !((result as { isError?: unknown } | null)?.isError === true);
     if (toolName === "mcp_server" && typeof a.target === "string") {
-      this.record({ name: a.target, action: "call", ok });
+      this.record({ name: "toolconnector", action: "call", ok });
     } else if (toolName === "search_mcp_ecosystem" && typeof a.engine === "string") {
-      this.record({ name: a.engine, action: "search", ok });
+      this.record({ name: "toolconnector", action: "search", ok });
     }
   }
 
@@ -110,12 +107,13 @@ export class TelemetryClient {
     try {
       const doFetch = this.options.fetchImpl ?? fetch;
       const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (this.options.token) headers.Authorization = `Bearer ${this.options.token}`;
       await doFetch(this.options.endpoint, {
         method: "POST",
+        credentials: "omit",
         headers,
         body: JSON.stringify({
-          events: batch.map((e) => ({ ...e, v: this.options.version })),
+          events: batch.map((e) => ({ name: "toolconnector", action: e.action, ok: e.ok,
+            v: /^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/.test(this.options.version) ? this.options.version : "unknown" })),
         }),
         signal: AbortSignal.timeout(5_000),
       });

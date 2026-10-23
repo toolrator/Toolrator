@@ -9,17 +9,19 @@ Thank you for considering contributing! This document covers the workflow for th
 git clone https://github.com/toolrator/Toolrator.git
 cd Toolrator
 
-# 2. Install dependencies — per package (this is what CI runs):
-cd packages/toolconnector && npm install
-cd ../toolhub && npm install
-cd ../toolpanel && npm install
+# 2. From the repository root (PowerShell or POSIX shell):
+npm --prefix packages/toolconnector ci
+npm --prefix packages/toolhub ci
+npm --prefix packages/toolpanel ci
 
-# 3. Run tests, per package
-cd packages/toolconnector && npm test
+# 3. Check each package:
+npm --prefix packages/toolconnector test
+npm --prefix packages/toolhub test
+npm --prefix packages/toolpanel test
+npm --prefix packages/toolconnector run typecheck
+npm --prefix packages/toolhub run typecheck
+npm --prefix packages/toolpanel run typecheck
 
-# The repo root also carries a convenience package.json with
-# `npm run test --workspaces --if-present`; it exists for local ergonomics
-# but is not exercised by CI, so treat per-package commands as canonical.
 ```
 
 ## Development Conventions
@@ -59,3 +61,13 @@ This project adheres to a [Code of Conduct](./CODE_OF_CONDUCT.md). By participat
 ---
 
 By contributing, you agree that your contributions are licensed under the Apache License, Version 2.0. See [LICENSE](./LICENSE).
+
+## Where help is useful
+
+Start with one package and a small, reproducible change. Current contribution opportunities:
+
+- **Client compatibility reports:** record the client version and negotiated protocol revision; verify discovery plus a harmless real tool call. Redact credentials and personal paths from logs. See `packages/toolconnector/tests/stdio-protocol.test.ts` for regression coverage.
+- **Search relevance fixtures:** contribute small synthetic catalog/query pairs demonstrating missed useful results or duplicated capability cards. Include expected relevant server IDs and explain why. Run Toolhub tests and search eval before proposing ranking changes.
+- **Cross-platform setup checks:** test the local stack from a clean clone on Windows, macOS or Linux. Supply exact commands and a documentation patch for a failing step.
+
+These are contribution directions, not claims of open issues. Open a feature request to coordinate larger changes before implementation. Questions can use a blank issue; include the package and what you tried. Maintainers review as availability permits; no response-time guarantee is implied.

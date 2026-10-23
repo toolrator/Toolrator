@@ -1012,3 +1012,23 @@ describe("Indexer - batched tool rebuild", () => {
     assert.deepStrictEqual(names, ["a2", "a3", "b1"], `unexpected tool set: ${names.join(", ")}`);
   });
 });
+
+describe("Search launch safeguards", () => {
+  test("known service names survive a page of unrelated copied capabilities", async () => {
+    const { service } = makeService({ SEARCH_MAX_LIMIT: "100" });
+    const tools = [{ name: "github-repo-shape", description: "Inspect a GitHub repository", inputSchema: { type: "object", properties: {} } }];
+    await service.indexer.indexBatch([
+      ...Array.from({ length: 40 }, (_, i) => ({ mcp_name: `io.github.publisher/country-${i}`, display_name: `Country ${i}`, description: "Country information", capabilities: { tools } })),
+      { mcp_name: "official/github", display_name: "GitHub", description: "Search and manage repositories", verified: true, capabilities: { tools: [{ name: "search_repositories", description: "Search GitHub repositories", inputSchema: { type: "object", properties: {} } }] } },
+    ]);
+    const result = await service.search("github", { limit: 10 });
+    assert.strictEqual(result.hits[0].mcp_name, "official/github");
+    assert.ok(result.toolHits.filter((hit) => hit.name === "github-repo-shape").length <= 1, "copied capability cards must not monopolize results");
+    assert.ok(result.toolHits.some((hit) => hit.name === "search_repositories"));
+  });
+
+  test("large pagination cannot cause an unbounded candidate fetch", async () => {
+    const { service } = makeService();
+    await assert.rejects(service.search("github", { offset: 1_000_000 }), RangeError);
+  });
+});

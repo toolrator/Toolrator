@@ -286,3 +286,17 @@ test("staged replaceAll writes carry the vector opt-out", async () => {
   assert.equal(toolDocs[0]._vectors.default, null);
   assert.deepEqual(toolDocs[1]._vectors.default, [0.1]);
 });
+
+test("custom catalogs keep tool indexes and embedding metadata isolated", async () => {
+  const { loadConfig } = await import("../src/config.js");
+  assert.equal(loadConfig({ MEILI_INDEX_NAME: "catalog_a" }).toolIndexName, "catalog_a_tools");
+  assert.equal(loadConfig({ MEILI_INDEX_NAME: "catalog_b" }).toolIndexName, "catalog_b_tools");
+  assert.equal(loadConfig({}).toolIndexName, "mcp_tools");
+  const seen: string[] = [];
+  for (const name of ["catalog_a", "catalog_b", "mcp_servers"]) {
+    const adapter = new MeiliSearchAdapter({ url: "http://localhost:7700", searchKey: "", adminKey: "", indexName: name });
+    Object.assign(adapter, { adminClient: { index: (indexName: string) => { seen.push(indexName); return { getDocument: async () => null }; } } });
+    await adapter.readEmbeddingMeta();
+  }
+  assert.deepEqual(seen, ["catalog_a_meta", "catalog_b_meta", "toolhub_meta"]);
+});

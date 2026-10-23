@@ -39,7 +39,7 @@
 > **The local-first discovery layer for AI agents.**  
 > `@toolrator/toolconnector` runs on your machine and bridges a stdio MCP client to search backends and external servers. Requests go to the endpoints you choose.
 
-> **Current interface:** Toolconnector 0.4.1 exposes three tools and OAuth login. Toolpanel 0.3.0 provides local configuration without the legacy device flow.
+> **Current interface:** The npm latest releases provide three connector tools, OAuth login, and local panel configuration.
 
 <br/>
 
@@ -91,8 +91,8 @@ This repository publishes the open-source client and discovery infrastructure fo
 
 | Package | Type | Run | Description |
 | :--- | :--- | :--- | :--- |
-| **🔌 `toolconnector`** | NPM CLI & Library | `npx -y @toolrator/toolconnector` | Local stdio MCP bridge — connects AI agents to search backends and external MCP servers |
-| **🛠️ `toolpanel`** | NPM CLI & Package | `npx -y @toolrator/toolpanel` | Local control panel — search-engine config and admin UI; no authentication |
+| **🔌 `toolconnector`** | NPM CLI & Library | `npx -y @toolrator/toolconnector@latest` | Local stdio MCP bridge — connects AI agents to search backends and external MCP servers |
+| **🛠️ `toolpanel`** | NPM CLI & Package | `npx -y @toolrator/toolpanel@latest` | Local control panel — search-engine config and admin UI; no authentication |
 | **🔍 `toolhub`** | Server Package | `npm run dev` | Typo-tolerant + hybrid vector search engine — MeiliSearch or in-memory backend |
 
 </div>
@@ -225,11 +225,15 @@ Add this to your MCP client configuration (Node.js ≥20):
   "mcpServers": {
     "toolconnector": {
       "command": "npx",
-      "args": ["-y", "@toolrator/toolconnector@0.4.1"]
+      "args": ["-y", "@toolrator/toolconnector@latest"]
     }
   }
 }
 ```
+
+`@latest` follows npm's latest release tag on a subsequent launch. Restart your MCP server/client to use an update; running processes and offline caches do not update themselves. Pin a tested version when reproducibility is required.
+
+Telemetry is off by default. Optional aggregate counts can be enabled with `TOOLRATOR_TELEMETRY=on`; endpoints, engine names and authentication credentials are excluded.
 
 Restart the client, then ask it to run `manage_auth` with `action: "start_oauth"` and show the verification URL. After approving login, ask it to search the configured catalog. Results depend on the servers listed by that search engine.
 
@@ -257,7 +261,7 @@ SEARCH_BACKEND=memory npm run dev
 <summary><b>Step 2 — Start the control panel</b></summary>
 
 ```bash
-npx -y @toolrator/toolpanel@0.3.0
+npx -y @toolrator/toolpanel@latest
 # → http://127.0.0.1:7800
 ```
 
@@ -275,7 +279,7 @@ Add to your MCP client config:
   "mcpServers": {
     "toolconnector": {
       "command": "npx",
-      "args": ["-y", "@toolrator/toolconnector@0.4.1"],
+      "args": ["-y", "@toolrator/toolconnector@latest"],
       "env": {
         "TOOLPANEL_URL": "http://127.0.0.1:7800",
         "CONNECTOR_SEARCH_CONFIG_MODE": "toolpanel",

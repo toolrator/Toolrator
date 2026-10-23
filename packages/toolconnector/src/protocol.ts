@@ -20,7 +20,12 @@
 // are served natively by the SDK and never pass through here.
 
 /** Every protocol revision this connector can speak. */
-export const SUPPORTED_PROTOCOL_VERSIONS = ["2026-07-28", "2025-11-25"] as const;
+// The SDK negotiates these legacy codecs itself, including its internal
+// negotiated version. Rewriting only the reply would leave server and client
+// disagreeing about the wire revision after initialization.
+export const SUPPORTED_PROTOCOL_VERSIONS = [
+  "2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05",
+] as const;
 
 /** The current (stateless) revision — replies for it use the modern shape. */
 export const MODERN_PROTOCOL_VERSION = "2026-07-28";

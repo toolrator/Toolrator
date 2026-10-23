@@ -50,6 +50,7 @@ export class MemorySearchAdapter implements SearchAdapter {
 
     // Apply filters
     items = applyFilters(items, options);
+    if (options?.identityOnly) items = items.filter((doc) => doc.display_name.toLowerCase().includes(query.toLowerCase().trim()));
 
     // Score and rank
     const normalizedQuery = query.trim().toLowerCase().replace(/\s+/g, " ");

@@ -18,7 +18,7 @@ Toolpanel is intentionally **lightweight**: a single Node process, Hono HTTP ser
 
 ### Option 1: Run instantly with npx (NPM Package)
 ```bash
-npx -y @toolrator/toolpanel
+npx -y @toolrator/toolpanel@latest
 # → http://127.0.0.1:7800
 ```
 
@@ -37,7 +37,7 @@ Then point toolconnector at toolpanel:
 export CONNECTOR_UPSTREAM_URL=http://127.0.0.1:7800
 # machine credential — toolpanel accepts any non-empty bearer
 export CONNECTOR_API_KEY=toolpanel-local
-npx -y @toolrator/toolconnector
+npx -y @toolrator/toolconnector@latest
 ```
 
 You also need a running [Toolhub](../toolhub) for the Search UI and admin pages to be useful:

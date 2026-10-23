@@ -168,8 +168,11 @@ export class MeiliSearchAdapter implements SearchAdapter {
 
   constructor(config: MeiliSearchAdapterConfig) {
     this.indexName = config.indexName;
-    this.toolIndexName = config.toolIndexName ?? "mcp_tools";
-    this.metaIndexName = config.metaIndexName ?? META_INDEX_NAME;
+    // Keep historical default names, but isolate custom catalogs and their
+    // embedding fingerprints. Sharing metadata made fresh test indexes skip
+    // required settings after an unrelated catalog changed model dimensions.
+    this.toolIndexName = config.toolIndexName ?? (config.indexName === "mcp_servers" ? "mcp_tools" : `${config.indexName}_tools`);
+    this.metaIndexName = config.metaIndexName ?? (config.indexName === "mcp_servers" ? META_INDEX_NAME : `${config.indexName}_meta`);
     this.host = config.url;
     this.adminKey = config.adminKey;
     this.dimensions = config.dimensions ?? 384;
@@ -294,6 +297,7 @@ export class MeiliSearchAdapter implements SearchAdapter {
       attributesToRetrieve: ["*"],
       showRankingScore: true,
     };
+    if (options?.identityOnly) searchParams.attributesToSearchOn = ["display_name"];
 
     if (filters.length > 0) {
       searchParams.filter = filters;

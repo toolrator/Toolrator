@@ -357,3 +357,29 @@ describe("POST /admin/embedding-fingerprint", () => {
     assert.equal(healthBody.embedding.needsReindex, false);
   });
 });
+
+// Admission must remain effective while an earlier caller is still processing.
+test("index writers reject overlap and health stays available", async () => {
+  const adapter = new MemorySearchAdapter();
+  let release!: () => void;
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  const hold = new Promise<void>((resolve) => { release = resolve; });
+  const embedder = fakeEmbedder();
+  embedder.embedMany = async (texts) => { entered(); await hold; return texts.map(() => [1, 2, 3]); };
+  const isolated = createApp(new SearchService(adapter, CONFIG, console, embedder), CONFIG);
+  const init = { method: "POST", headers: { Authorization: `Bearer ${CONFIG.adminToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ mcp_name: "overlap-test", display_name: "Overlap test" }) };
+  const first = isolated.request("/admin/index", init);
+  await started;
+  try {
+    assert.equal((await isolated.request("/admin/index", init)).status, 503);
+    assert.equal((await isolated.request("/health/live")).status, 200);
+  } finally { release(); }
+  assert.equal((await first).status, 200);
+  assert.equal((await isolated.request("/admin/index", init)).status, 200);
+});
+
+test("public search rejects oversized JSON and deep pagination", async () => {
+  assert.equal((await app.request("/search", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ q: "x".repeat(70_000) }) })).status, 413);
+  assert.equal((await app.request("/search?q=github&offset=1000000")).status, 400);
+});

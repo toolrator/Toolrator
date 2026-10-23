@@ -14,6 +14,18 @@ Package versions are independent; each version heading identifies its package an
 - **Toolhub:** transient Meilisearch failures (408/429/5xx, network resets) on search are retried with backoff before failing; the local embedding path streams chunk pooling (halves peak memory on full-catalog reindexes) and yields between batches so `/health` stays responsive during long embedding jobs.
 - Refreshed Toolhub's Hono lockfile to the patched release.
 - Baseline-update workflows check out `main` and rebase before pushing their generated changes.
+- Toolhub bounds search/cache work and concurrent index mutations, improves service-name matching, and isolates custom catalogs' tool indexes and embedding metadata.
+- Contributor setup commands, branch links, and user-facing npm commands now use the current public layout and `@latest` where appropriate.
+
+## [`@toolrator/toolconnector` 0.4.3](https://github.com/toolrator/Toolrator/releases/tag/toolconnector-v0.4.3) - 2026-10-23
+
+### Fixed
+
+- Older MCP clients can negotiate `2025-06-18`, `2025-03-26`, and `2024-11-05` through the SDK instead of receiving an unsupported `2025-11-25` response. Modern `2026-07-28` and existing `2025-11-25` support remain covered by regression tests.
+
+### Changed
+
+- Usage telemetry is now off by default. Explicit opt-in sends only aggregate connector actions, without target URLs, custom search-engine identifiers, or bearer credentials. Normal transport metadata such as IP addresses remains visible to the receiving service.
 
 ## [`@toolrator/toolconnector` 0.4.2](https://github.com/toolrator/Toolrator/releases/tag/toolconnector-v0.4.2) - 2026-10-10
 

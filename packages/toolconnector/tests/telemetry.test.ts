@@ -20,8 +20,8 @@ function makeClient(
 }
 
 test("telemetry kill switch parsing", () => {
-  assert.equal(telemetryEnabledFromEnv(undefined), true);
-  assert.equal(telemetryEnabledFromEnv(""), true);
+  assert.equal(telemetryEnabledFromEnv(undefined), false);
+  assert.equal(telemetryEnabledFromEnv(""), false);
   assert.equal(telemetryEnabledFromEnv("on"), true);
   assert.equal(telemetryEnabledFromEnv("off"), false);
   assert.equal(telemetryEnabledFromEnv("FALSE"), false);
@@ -29,7 +29,7 @@ test("telemetry kill switch parsing", () => {
   assert.equal(telemetryEnabledFromEnv(" no "), false);
 });
 
-test("records mcp_server targets and search engines only, with ok flags", async (t) => {
+test("records aggregate call/search outcomes without service identifiers", async (t) => {
   const bodies: unknown[] = [];
   const fetchImpl: typeof fetch = async (_url, init) => {
     bodies.push(JSON.parse(String(init?.body)));
@@ -48,8 +48,8 @@ test("records mcp_server targets and search engines only, with ok flags", async 
   assert.deepEqual(
     events.map((e) => ({ name: e.name, action: e.action, ok: e.ok })),
     [
-      { name: "https://a.example/mcp", action: "call", ok: true },
-      { name: "toolhub-default", action: "search", ok: false },
+      { name: "toolconnector", action: "call", ok: true },
+      { name: "toolconnector", action: "search", ok: false },
     ],
   );
   assert.equal(events[0].v, "0.0.0-test");
@@ -83,7 +83,7 @@ test("queue is bounded and drops the oldest events", (t) => {
   const client = makeClient(fetchImpl, { maxQueue: 3, maxBatch: 100 });
   t.after(() => client.stop());
   for (let i = 0; i < 5; i++) {
-    client.record({ name: `n${i}`, action: "call", ok: true });
+    client.record({ name: "toolconnector", action: "call", ok: true });
   }
   assert.equal(client.pending, 3);
 });
@@ -108,7 +108,7 @@ test("failed flush drops the batch without throwing", async (t) => {
   };
   const client = makeClient(fetchImpl);
   t.after(() => client.stop());
-  client.record({ name: "x", action: "call", ok: true });
+  client.record({ name: "toolconnector", action: "call", ok: true });
   await client.flush();
   assert.equal(client.pending, 0);
 });
@@ -122,9 +122,29 @@ test("invalid events are dropped, not sent", async (t) => {
   const client = makeClient(fetchImpl, { maxBatch: 10 });
   t.after(() => client.stop());
   client.record({ name: "", action: "call", ok: true });
-  client.record({ name: "x", action: "search", ok: true });
+  client.record({ name: "toolconnector", action: "search", ok: true });
   await client.flush();
   const events = (bodies[0] as { events: Array<Record<string, unknown>> }).events;
   assert.equal(events.length, 1);
-  assert.equal(events[0].name, "x");
+  assert.equal(events[0].name, "toolconnector");
+});
+
+
+test("private endpoints, URL credentials and custom engine IDs never leave the connector", async (t) => {
+  const requests: RequestInit[] = [];
+  const client = makeClient(async (_url, init) => { requests.push(init!); return new Response(null, { status: 204 }); });
+  t.after(() => client.stop());
+  for (const target of ["http://localhost:9000/private", "https://user:password@internal.example/path?api_key=secret#token"]) {
+    client.recordFromToolCall("mcp_server", { target }, {});
+  }
+  client.recordFromToolCall("search_mcp_ecosystem", { engine: "private-customer-engine" }, {});
+  client.record({ name: "https://internal.example/secret", action: "call", ok: true });
+  await client.flush();
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].credentials, "omit");
+  assert.equal(new Headers(requests[0].headers).has("authorization"), false);
+  const wire = String(requests[0].body);
+  for (const secret of ["localhost", "internal.example", "password", "api_key", "private-customer", "https:"]) assert.ok(!wire.includes(secret));
+  assert.equal(JSON.parse(wire).events.length, 3);
+  assert.equal(telemetryEnabledFromEnv("typo"), false);
 });

@@ -388,3 +388,11 @@ To add a new backend, implement the `SearchAdapter` interface in `src/adapters/`
 
 - **Loopback-only by default** — the server binds `127.0.0.1` (see `HOST`). To expose it to other machines, set `HOST=0.0.0.0` explicitly and put it behind a firewall/reverse proxy; the admin endpoints are only protected by `SEARCH_ADMIN_TOKEN`.
 - **Admin-token guard** — the server **refuses to start** when bound to a non-loopback interface (`HOST=0.0.0.0`) without a `SEARCH_ADMIN_TOKEN` (or with the legacy well-known `dev-admin-token`). Loopback binds with no token only print a warning, so local development keeps working. CORS is enabled on public routes only, never on `/admin/*`, and admin-token comparison is constant-time.
+
+## Serving under load
+
+Custom `MEILI_INDEX_NAME` values derive separate `<name>_tools` and `<name>_meta` indexes by default. Standard `mcp_servers`, `mcp_tools` and `toolhub_meta` names remain unchanged. A custom catalog previously sharing the standard tool index needs a deliberate reindex into its isolated tool index; the old shared data is not deleted automatically.
+
+Public search accepts at most 64 KiB of JSON and a pagination window of 1000 results. Narrow the query or use the index dump to access larger collections. At most 32 distinct searches may be outstanding; identical requests share work. Overload returns HTTP 503 with Retry-After rather than queuing indefinitely. Result-cache size is bounded, including a per-entry limit. The HTTP public service should still be protected by an appropriate fronting request limiter.
+
+Only one admin mutation runs at a time. A caller timeout does not cancel an ongoing embedding/indexing operation; subsequent writers receive 503 until it finishes. Health and read endpoints remain available. Recheck capacity against your own catalog and hardware before advertising throughput.

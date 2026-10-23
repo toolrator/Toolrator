@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { InMemoryTransport } from "@modelcontextprotocol/client";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { z } from "zod";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { createConnectorServer } from "../src/index.js";
 import { installInitializeNegotiation } from "../src/protocol.js";
@@ -66,7 +67,7 @@ test("connector stdio server negotiates modern versions through legacy initializ
   assert.equal(message.result?._meta?.["io.modelcontextprotocol/serverInfo"]?.name, "toolconnector");
 });
 
-test("initialize with an unsupported legacy version keeps the server-chosen fallback", async (t) => {
+test("initialize with an unknown version keeps the server-chosen fallback", async (t) => {
   const server = createConnectorServer();
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const stdio = serveStdio(() => server, { transport: serverTransport });
@@ -76,10 +77,30 @@ test("initialize with an unsupported legacy version keeps the server-chosen fall
   const response = new Promise<unknown>((resolve) => { clientTransport.onmessage = resolve; });
   await clientTransport.send({
     jsonrpc: "2.0", id: 4, method: "initialize",
-    params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "old-client", version: "1.0.0" } },
+    params: { protocolVersion: "1900-01-01", capabilities: {}, clientInfo: { name: "old-client", version: "1.0.0" } },
   });
   const message = await response as { result?: { protocolVersion: string }; error?: unknown };
   assert.equal(message.error, undefined);
-  // 2025-06-18 is not supported — the SDK's fallback (2025-11-25) stands.
+  // Unknown revisions must never be advertised as supported.
   assert.equal(message.result?.protocolVersion, "2025-11-25");
 });
+
+for (const revision of ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]) {
+  test(`a client restricted to ${revision} initializes, lists and calls a tool`, async (t) => {
+    const server = createConnectorServer();
+    server.registerTool("echo", { inputSchema: { value: z.string() } }, async ({ value }) => ({
+      content: [{ type: "text" as const, text: value }],
+    }));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const stdio = serveStdio(() => server, { transport: serverTransport });
+    installInitializeNegotiation(serverTransport, { name: "toolconnector", version: "test" });
+    const client = new Client({ name: "restricted-client", version: "1" }, {
+      supportedProtocolVersions: [revision], versionNegotiation: { mode: "legacy" }, capabilities: {},
+    });
+    t.after(async () => { await client.close(); await stdio.close(); });
+    await client.connect(clientTransport);
+    assert.equal((await client.listTools()).tools[0].name, "echo");
+    const result = await client.callTool({ name: "echo", arguments: { value: "working" } });
+    assert.deepEqual(result.content, [{ type: "text", text: "working" }]);
+  });
+}
