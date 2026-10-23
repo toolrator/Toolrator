@@ -1,7 +1,7 @@
 # MCP Feature Compliance — Toolconnector
 
 > **Protocol**: MCP 2026-07-28 (Official — released 2026-07-28)  
-> **SDK**: `@modelcontextprotocol/server` + `@modelcontextprotocol/client` 2.2.0 (exact pins in `package.json`)  
+> **SDK**: `@modelcontextprotocol/server` + `@modelcontextprotocol/client` (exact versions pinned in `package.json`)<br>
 > **Last updated**: 2026-09-30
 
 This document tracks every MCP 2026-07-28 protocol feature and whether it is implemented in the toolconnector. The toolconnector acts as both:
