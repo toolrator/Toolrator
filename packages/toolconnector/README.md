@@ -38,7 +38,7 @@ The **Toolconnector** is a lightweight, local **stdio Model Context Protocol (MC
 
 `toolconnector` acts as the **universal adapter**. By installing `toolconnector` locally, your local AI agent gains instant, secure, and authenticated access to any configured search-engine backend (via toolpanel or a compatible upstream) and external MCP servers.
 
-Version 0.4.2 exposes exactly **3 tools**, so the agent's context window carries three tool definitions instead of dozens. Interactive login uses OAuth; API keys remain supported as machine credentials.
+Toolconnector exposes exactly **3 tools**, so the agent's context window carries three tool definitions instead of dozens. Interactive login uses OAuth; API keys remain supported as machine credentials.
 
 ---
 

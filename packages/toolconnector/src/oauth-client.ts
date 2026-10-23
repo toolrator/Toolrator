@@ -488,7 +488,9 @@ export async function fetchWithTimeout(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    // Token, device-code and PKCE POST bodies must never be replayed to a
+    // redirect destination. Authorization metadata should name the final URL.
+    return await fetch(url, { ...init, redirect: init.method?.toUpperCase() === "POST" ? "error" : init.redirect, signal: controller.signal });
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       throw new Error(`Request timed out after ${timeoutMs}ms: ${url}`);

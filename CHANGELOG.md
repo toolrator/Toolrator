@@ -17,6 +17,14 @@ Package versions are independent; each version heading identifies its package an
 - Toolhub bounds search/cache work and concurrent index mutations, improves service-name matching, and isolates custom catalogs' tool indexes and embedding metadata.
 - Contributor setup commands, branch links, and user-facing npm commands now use the current public layout and `@latest` where appropriate.
 
+## [`@toolrator/toolconnector` 0.4.4](https://github.com/toolrator/Toolrator/releases/tag/toolconnector-v0.4.4) - 2026-10-23
+
+### Security
+
+- Upgrade the MCP client and server SDKs to 2.3.1, addressing their published 2.2.0 advisories. Keep the SDK's default same-origin policy for HTTP/SSE redirects.
+- Reject redirects for the connector's own OAuth POST requests so refresh tokens, device codes and PKCE verifiers are not replayed to redirect destinations. Configure final OAuth endpoint URLs.
+- Add cross-origin 307/308 regression tests for MCP custom headers and OAuth POST bodies. Preserve the older-client compatibility fix from 0.4.3.
+
 ## [`@toolrator/toolconnector` 0.4.3](https://github.com/toolrator/Toolrator/releases/tag/toolconnector-v0.4.3) - 2026-10-23
 
 ### Fixed

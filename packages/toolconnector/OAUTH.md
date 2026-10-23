@@ -9,6 +9,13 @@ Toolconnector's implementation status per feature lives in
 [`MCP-FEATURES.md`](./MCP-FEATURES.md) §8; the file you are reading is the
 conceptual explainer.
 
+OAuth POST endpoints must be final URLs: the connector rejects redirects for
+token exchanges, refreshes and device-grant requests to prevent replaying secret
+bodies to another destination. The SDK's HTTP/SSE transports use their default
+same-origin redirect policy; custom headers and request bodies are not forwarded
+across origins. Configure the final MCP endpoint URL when a provider redirects
+to a different origin.
+
 ---
 
 ## The actors
