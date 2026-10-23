@@ -5,11 +5,19 @@ on:
     branches: [ main ]
     paths:
       - 'packages/toolconnector/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'packages/*/package.json'
+      - 'packages/*/package-lock.json'
       - '.github/workflows/toolconnector-ci.yml'
   pull_request:
     branches: [ main ]
     paths:
       - 'packages/toolconnector/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'packages/*/package.json'
+      - 'packages/*/package-lock.json'
 
 permissions:
   contents: read
