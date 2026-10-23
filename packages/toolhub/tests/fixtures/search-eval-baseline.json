@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-09-30T18:59:04.211Z",
+  "updatedAt": "2026-10-23T12:32:35.234Z",
   "local": {
     "weighted": 80,
     "precisionAt1": 0.7188,
@@ -14,12 +14,6 @@
     "falseToolRate": 0,
     "__history": [
       {
-        "weighted": 78,
-        "precisionAt3": 0.875,
-        "toolPrecisionAt3": 0.9375,
-        "intentAccuracy": 63
-      },
-      {
         "weighted": 80,
         "precisionAt3": 0.875,
         "toolPrecisionAt3": 0.9375,
@@ -70,6 +64,12 @@
       {
         "weighted": 80,
         "precisionAt3": 0.875,
+        "toolPrecisionAt3": 0.9375,
+        "intentAccuracy": 63
+      },
+      {
+        "weighted": 78,
+        "precisionAt3": 0.8438,
         "toolPrecisionAt3": 0.9375,
         "intentAccuracy": 63
       }
