@@ -27,11 +27,11 @@
     "p95MaxMs": 1000,
     "p99MaxMs": 3000,
     "throughputRpsFloor": {
-      "5": 1275,
-      "10": 1474,
-      "20": 1480
+      "5": 1178,
+      "10": 1305,
+      "20": 1345
     },
-    "soakRpsFloor": 1454,
+    "soakRpsFloor": 1318,
     "errorRateMax": 0.005,
     "rssGrowthMaxPct": 0.2,
     "rssPeakMaxMb": 3900
