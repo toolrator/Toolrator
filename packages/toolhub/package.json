@@ -54,7 +54,7 @@
     "@hono/node-server": "^2.1.1",
     "@huggingface/transformers": "4.3.0",
     "hono": "^4.6.11",
-    "lru-cache": "^11.5.2",
+    "lru-cache": "^11.5.3",
     "meilisearch": "^0.48.0"
   },
   "devDependencies": {
