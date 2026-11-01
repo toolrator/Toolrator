@@ -58,7 +58,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@hono/node-server": "^2.1.1",
+    "@hono/node-server": "^2.1.5",
     "@types/node": "^26.5.1",
     "hono": "^4.6.11",
     "tsx": "^4.23.13",
